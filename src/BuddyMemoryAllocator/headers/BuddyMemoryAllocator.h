@@ -17,6 +17,7 @@
 #define _BUDDY_MMAP_ALLOC_H_
 
 #include <map>
+#include <unordered_map>
 #include <set>
 #include <list>
 #include <vector>
@@ -68,6 +69,7 @@
 class BuddyMemoryAllocator {
 private:
     std::mutex mtx;
+    bool mHeapInitialized;
 
     struct PageDescriptor {
         int page_index;
@@ -79,6 +81,7 @@ private:
         void* mem_ptr;
         int size;
         PageDescriptor* pd;
+        BuddyChunk(void* ptr, int s, PageDescriptor* p) : mem_ptr(ptr), size(s), pd(p) { }
     };
     // binary search tree chunk
     struct BSTreeChunk {
@@ -87,11 +90,12 @@ private:
         bool used;
         BSTreeChunk* prev; // pointer to previous physical chunk
         BSTreeChunk* next;
+        BSTreeChunk(void* ptr, int s, bool u) : mem_ptr(ptr), size(s), used(u), prev(nullptr), next(nullptr) { }
     };
 
     char* buddy_base;
 
-    std::vector<std::list<PageDescriptor*> free_area;
+    std::vector<std::list<PageDescriptor*>*> free_area;
     std::multimap<int, void*> free_tree;
 
     // not store info in chuck
@@ -122,6 +126,8 @@ public:
     BuddyMemoryAllocator& operator =(const BuddyMemoryAllocator& rhs) = delete;
 
     ~BuddyMemoryAllocator(void);
+
+    static BuddyMemoryAllocator& GetAllocator(void);
 
     void* MmapAlloc(size_t noBytes, int node, const char* f, int l);
 

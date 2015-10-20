@@ -58,7 +58,7 @@ off_t mmap_used(void) {
 }
 
 BuddyMemoryAllocator::BuddyMemoryAllocator(void) : mHeapInitialized{false} {
-    free_area = vector<list<BuddyChunk*>(MAX_ORDER);
+    free_area = vector<list<PageDescriptor*>*>(MAX_ORDER);
 }
 
 
@@ -93,12 +93,12 @@ void BuddyMemoryAllocator::HeapInit() {
     }
     // initalized buddy system
     buddy_base = static_cast<char*>(new_chunk);
-    free_area[MAX_ORDER - 1].emplace_back(new PageDescriptor(0, MAX_ORDER));
+    free_area[MAX_ORDER - 1]->emplace_back(new PageDescriptor(0, MAX_ORDER));
 
     void* tree_base = static_cast<void*>(buddy_base + PageSizeToBytes(BUDDY_PAGE_SIZE));
     int tree_size = INIT_HEAP_PAGE_SIZE - BUDDY_PAGE_SIZE;
 
-    free_tree.insert({tree_size, tree_base});
+    free_tree.emplace(tree_size, tree_base);
 }
 
 void* BuddyMemoryAllocator::MmapAlloc(size_t noBytes, int node, const char* f, int l) {
@@ -112,7 +112,7 @@ void* BuddyMemoryAllocator::MmapAlloc(size_t noBytes, int node, const char* f, i
 
     int noPages = BytesToPageSize(noBytes);
     void* res_ptr = nullptr;
-    if (numPages <= BUDDY_PAGE_SIZE) {
+    if (noPages <= BUDDY_PAGE_SIZE) {
         res_ptr = BuddyAlloc(noPages, node);
     }
     if (!res_ptr) {
@@ -124,25 +124,25 @@ void* BuddyMemoryAllocator::MmapAlloc(size_t noBytes, int node, const char* f, i
 void* BuddyMemoryAllocator::BuddyAlloc(int noPages, int node) {
     int order = 0;
     for (int current_order = 0; current_order < MAX_ORDER; current_order++) {
-        if (numPages < BuddyBlockSize(current_order)) {
-            if (free_area[current_order].empty()) {
+        if (noPages < BuddyBlockSize(current_order)) {
+            if (free_area[current_order]->empty()) {
                 order = current_order;
                 continue;
             }
             size_t size = 1 << current_order;
-            PageDescriptor* pd = free_area[current_order].front();
-            free_area[current_order].pop_front();
-            BuddyChunk* fit_chunk = new BuddyChunk;
-            fit_chunk->mem_ptr = static_cast<void*>(buddy_base + PageSizeToBytes(size));
-            fit_chunk->size = order == 0 ? size : 1 << order;
-            fit_chunk->pd = pd;
-            ptr_to_budchunk.insert({fit_chunk->mem_ptr, fit_chunk});
+            PageDescriptor* pd = free_area[current_order]->front();
+            free_area[current_order]->pop_front();
+
+            void* mem_ptr = static_cast<void*>(buddy_base + PageSizeToBytes(size));
+            int chunk_size = order == 0 ? size : 1 << order;
+            BuddyChunk* fit_chunk = new BuddyChunk(mem_ptr, chunk_size, pd);
+            ptr_to_budchunk.emplace(fit_chunk->mem_ptr, fit_chunk);
 
             while (current_order > order) {
                 current_order--;
                 size >>= 1;
                 PageDescriptor* buddy = new PageDescriptor(pd->page_index + size, current_order);
-                free_area[current_order].emplace_back(buddy);
+                free_area[current_order]->emplace_back(buddy);
             }
             return fit_chunk->mem_ptr;
         }
@@ -155,18 +155,15 @@ void* BuddyMemoryAllocator::BuddyAlloc(int noPages, int node) {
     if (it == free_tree.end()) {
         return nullptr;
     } else {
-        BSTreeChunk* tree_chunk = new BSTreeChunk;
-        tree_chunk->mem_ptr = it->second;
-        tree_chunk->size = noPages;
-        tree_chunk->used = true;
+        BSTreeChunk* tree_chunk = new BSTreeChunk(it->second, noPages, true);
         // tree_chunk->prev = TODO
         // tree_chunk->next = TODO
         if (it->first == noPages) {
-            ptr_to_bstchunk(it->second, tree_chunk);
+            ptr_to_bstchunk.emplace(it->second, tree_chunk);
             free_tree.erase(it);
         } else {
-            void* remain = static_cast<void*>(static_cast<char*>(tree_chunk->mem_ptr) + PageSizeToBytes(size));
-            free_tree.insert(it->first - noPages, remain);
+            void* remain = static_cast<void*>(static_cast<char*>(tree_chunk->mem_ptr) + PageSizeToBytes(noPages));
+            free_tree.emplace(it->first - noPages, remain);
         }
         return tree_chunk->mem_ptr;
     }
