@@ -19,6 +19,7 @@
 #include <map>
 #include <unordered_map>
 #include <set>
+#include <unordered_set>
 #include <list>
 #include <vector>
 #include <mutex>
@@ -94,11 +95,15 @@ private:
     };
 
     char* buddy_base;
-
+    // reserve fixed size chunk for hash entry
+    std::vector<void*> reserved_hash_entries;
+    // array of free list in buddy system
     std::vector<std::list<PageDescriptor*>*> free_area;
+    // binary search tree of free list
     std::multimap<int, void*> free_tree;
 
     // not store info in chuck
+    std::unordered_set<void*> occupied_hash_entries;
     std::unordered_map<void*, BuddyChunk*> ptr_to_budchunk;
     std::unordered_map<void*, BSTreeChunk*> ptr_to_bstchunk;
 
@@ -110,13 +115,15 @@ private:
 
     void HeapInit();
 
-    void* BuddyAlloc(int noPages, int node);
+    void* HashSegAlloc();
 
-    void* BSTreeAlloc(int noPages, int node);
+    void* BuddyAlloc(int num_pages, int node);
 
-    size_t AllocatedPages();
+    void* BSTreeAlloc(int num_pages, int node);
 
-    size_t FreePages();
+    void BuddyFree(void* ptr);
+
+    void BSTreeFree(void* ptr);
 
 public:
     BuddyMemoryAllocator(void);
@@ -134,6 +141,10 @@ public:
     void MmapChangeProt(void* ptr, int prot);
 
     void MmapFree(void* ptr);
+
+    size_t AllocatedPages();
+
+    size_t FreePages();
 };
 
 

@@ -110,21 +110,45 @@ void* BuddyMemoryAllocator::MmapAlloc(size_t noBytes, int node, const char* f, i
     if (!mHeapInitialized)
         HeapInit();
 
-    int noPages = BytesToPageSize(noBytes);
+    int num_pages = BytesToPageSize(noBytes);
+    // TODO make hash seg page size a constexpr to avoid evaluate every time
+    int hash_seg_page_size = BytesToPageSize(HASH_SEG_SIZE);
     void* res_ptr = nullptr;
-    if (noPages <= BUDDY_PAGE_SIZE) {
-        res_ptr = BuddyAlloc(noPages, node);
+    if (num_pages == hash_seg_page_size) {
+        return HashSegAlloc();
+    }
+    if (num_pages <= BUDDY_PAGE_SIZE) {
+        res_ptr = BuddyAlloc(num_pages, node);
     }
     if (!res_ptr) {
-        res_ptr = BSTreeAlloc(noPages, node);
+        res_ptr = BSTreeAlloc(num_pages, node);
     }
     return res_ptr;
 }
 
-void* BuddyMemoryAllocator::BuddyAlloc(int noPages, int node) {
+void* BuddyMemoryAllocator::HashSegAlloc() {
+    void* res_ptr = nullptr;
+    if (reserved_hash_entries.empty()) {
+        // may use page aligned size
+        void* res_ptr = SYS_MMAP_ALLOC(HASH_SEG_SIZE);
+        if (!SYS_MMAP_CHECK(res_ptr)){
+            perror("BuddyMemoryAllocator");
+            FATAL("The memory allocator could not allocate memory");
+        }
+    } else {
+        res_ptr = reserved_hash_entries.back();
+        reserved_hash_entries.pop_back();
+    }
+    occupied_hash_entries.emplace(res_ptr);
+    SYS_MMAP_PROT(res_ptr, HASH_SEG_SIZE, PROT_READ | PROT_WRITE);
+    return res_ptr;
+}
+
+
+void* BuddyMemoryAllocator::BuddyAlloc(int num_pages, int node) {
     int order = 0;
     for (int current_order = 0; current_order < MAX_ORDER; current_order++) {
-        if (noPages < BuddyBlockSize(current_order)) {
+        if (num_pages < BuddyBlockSize(current_order)) {
             if (free_area[current_order]->empty()) {
                 order = current_order;
                 continue;
@@ -150,20 +174,20 @@ void* BuddyMemoryAllocator::BuddyAlloc(int noPages, int node) {
     return nullptr;
 }
 
- void* BuddyMemoryAllocator::BSTreeAlloc(int noPages, int node) {
-    auto it = free_tree.lower_bound(noPages);
+ void* BuddyMemoryAllocator::BSTreeAlloc(int num_pages, int node) {
+    auto it = free_tree.lower_bound(num_pages);
     if (it == free_tree.end()) {
         return nullptr;
     } else {
-        BSTreeChunk* tree_chunk = new BSTreeChunk(it->second, noPages, true);
+        BSTreeChunk* tree_chunk = new BSTreeChunk(it->second, num_pages, true);
         // tree_chunk->prev = TODO
         // tree_chunk->next = TODO
-        if (it->first == noPages) {
+        if (it->first == num_pages) {
             ptr_to_bstchunk.emplace(it->second, tree_chunk);
             free_tree.erase(it);
         } else {
-            void* remain = static_cast<void*>(static_cast<char*>(tree_chunk->mem_ptr) + PageSizeToBytes(noPages));
-            free_tree.emplace(it->first - noPages, remain);
+            void* remain = static_cast<void*>(static_cast<char*>(tree_chunk->mem_ptr) + PageSizeToBytes(num_pages));
+            free_tree.emplace(it->first - num_pages, remain);
         }
         return tree_chunk->mem_ptr;
     }
@@ -175,6 +199,19 @@ void BuddyMemoryAllocator::MmapChangeProt(void* ptr, int prot) {
     }
 
     lock_guard<mutex> lck(mtx);
+    if (occupied_hash_entries.find(ptr) != occupied_hash_entries.end()) {
+        SYS_MMAP_PROT(ptr, PageSizeToBytes(BytesToPageSize(HASH_SEG_SIZE)), prot);
+    } else if (ptr_to_budchunk.find(ptr) != ptr_to_budchunk.end()) {
+        WARNINGIF( SYS_MMAP_PROT(ptr, PageSizeToBytes(ptr_to_budchunk[ptr]->size), prot) == -1,
+            "Changing protection of page at address %p size %d failed with message %s", ptr, ptr_to_budchunk[ptr]->size, strerror(errno));
+    } else {
+        // find the size and insert the freed memory in the
+        auto it = ptr_to_bstchunk.find(ptr);
+        FATALIF(it == ptr_to_bstchunk.end(), "Changing the protection of unallocated pointer %p.", ptr);
+         // change protection
+        WARNINGIF( SYS_MMAP_PROT(ptr, PageSizeToBytes(it->second->size), prot) == -1,
+            "Changing protection of page at address %p size %d failed with message %s", ptr, it->second->size, strerror(errno));
+    }
 }
 
 void BuddyMemoryAllocator::MmapFree(void* ptr) {
@@ -183,8 +220,25 @@ void BuddyMemoryAllocator::MmapFree(void* ptr) {
     }
 
     lock_guard<mutex> lck(mtx);
+    if (occupied_hash_entries.find(ptr) != occupied_hash_entries.end()) {
+        reserved_hash_entries.push_back(ptr);
+        occupied_hash_entries.erase(ptr);
+    } else if (ptr_to_budchunk.find(ptr) != ptr_to_budchunk.end()) {
+        BuddyFree(ptr);
+    } else {
+        FATALIF(ptr_to_bstchunk.find(ptr) == ptr_to_bstchunk.end(), "Freeing unallocated pointer %p.", ptr);
+        BSTreeFree(ptr);
+    }
+}
 
+void BuddyMemoryAllocator::BuddyFree(void* ptr) {
+    BuddyChunk* cur_chunk = ptr_to_budchunk[ptr];
+    // TODO Coalesce with buddy
+}
 
+void BuddyMemoryAllocator::BSTreeFree(void* ptr) {
+    BSTreeChunk* cur_chunk = ptr_to_bstchunk[ptr];
+    // TODO Coalesce with prev and next
 }
 
 size_t BuddyMemoryAllocator::AllocatedPages() {
