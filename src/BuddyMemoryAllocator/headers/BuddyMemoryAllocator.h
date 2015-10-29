@@ -71,6 +71,13 @@ class BuddyMemoryAllocator {
 private:
     std::mutex mtx;
     bool mHeapInitialized;
+    // STYLE google code style constant naming
+    // page size of hash segment
+    const int kHashSegPageSize;
+    // page aligned hash segment size
+    const size_t kHashSegAlignedSize;
+    // Use buddy allocation when the request under threshold, otherwise use binary search tree
+    const int kBuddyPageSize;
 
     struct PageDescriptor {
         int page_index;
@@ -96,14 +103,14 @@ private:
 
     char* buddy_base;
     // reserve fixed size chunk for hash entry
-    std::vector<void*> reserved_hash_entries;
+    std::vector<void*> reserved_hash_segs;
     // array of free list in buddy system
-    std::vector<std::list<PageDescriptor*>*> free_area;
+    std::vector<std::list<PageDescriptor*>> free_area;
     // binary search tree of free list
     std::multimap<int, void*> free_tree;
 
-    // not store info in chuck
-    std::unordered_set<void*> occupied_hash_entries;
+    // store chunk info in external data structure to avoid breaking DMA
+    std::unordered_set<void*> occupied_hash_segs;
     std::unordered_map<void*, BuddyChunk*> ptr_to_budchunk;
     std::unordered_map<void*, BSTreeChunk*> ptr_to_bstchunk;
 
