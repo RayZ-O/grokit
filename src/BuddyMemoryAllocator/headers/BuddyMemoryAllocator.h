@@ -69,8 +69,10 @@
 
 class BuddyMemoryAllocator {
 private:
-    std::mutex mtx;
-    bool mHeapInitialized;
+    std::mutex mtx_;
+    bool is_initialized_;
+    int allocated_pages_;
+    int free_pages_;
     // STYLE google code style constant naming
     // page size of hash segment
     const int kHashSegPageSize;
@@ -78,18 +80,21 @@ private:
     const size_t kHashSegAlignedSize;
     // Use buddy allocation when the request under threshold, otherwise use binary search tree
     const int kBuddyPageSize;
-
-    struct PageDescriptor {
-        int page_index;
-        int order;
-        PageDescriptor(int idx, int o) : page_index(idx), order(o) { }
-    };
     // buddy system chunk
     struct BuddyChunk {
         void* mem_ptr;
         int size;
-        PageDescriptor* pd;
-        BuddyChunk(void* ptr, int s, PageDescriptor* p) : mem_ptr(ptr), size(s), pd(p) { }
+        bool used;
+        int order;
+        int page_index;
+        BuddyChunk(void* ptr, int s, bool u, int o, int i) : mem_ptr(ptr), size(s), used(u), order(o), page_index(i) { }
+        void set(void* ptr, int s, bool u, int o, int i) {
+            mem_ptr = ptr;
+            size = s;
+            used = u;
+            order = o;
+            page_index = i;
+        }
     };
     // binary search tree chunk
     struct BSTreeChunk {
@@ -101,11 +106,15 @@ private:
         BSTreeChunk(void* ptr, int s, bool u) : mem_ptr(ptr), size(s), used(u), prev(nullptr), next(nullptr) { }
     };
 
+    // buddy bin size look up table
+    std::vector<int> buddy_bin_size_table;
+    // point to the beginning of buddy memory
     char* buddy_base;
     // reserve fixed size chunk for hash entry
     std::vector<void*> reserved_hash_segs;
     // array of free list in buddy system
-    std::vector<std::list<PageDescriptor*>> free_area;
+    // TODO vector + reserve may be faster than list
+    std::vector<std::list<int>> free_area;
     // binary search tree of free list
     std::multimap<int, void*> free_tree;
 
@@ -116,7 +125,11 @@ private:
 
     int BytesToPageSize(size_t bytes);
 
-    size_t PageSizeToBytes(int pSize);
+    size_t PageSizeToBytes(int page_size);
+
+    int GetOrder(int page_size);
+
+    void UpdateStatus(int allocated_size);
 
     int BuddyBlockSize(int order);
 
@@ -149,9 +162,9 @@ public:
 
     void MmapFree(void* ptr);
 
-    size_t AllocatedPages();
+    size_t AllocatedPages() const;
 
-    size_t FreePages();
+    size_t FreePages() const;
 };
 
 
