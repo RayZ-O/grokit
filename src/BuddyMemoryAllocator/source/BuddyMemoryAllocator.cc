@@ -105,7 +105,7 @@ void BuddyMemoryAllocator::HeapInit() {
     free_pages_ = INIT_HEAP_PAGE_SIZE;
     // initalized buddy system
     buddy_base = reinterpret_cast<char*>(new_chunk);
-    free_area[MAX_ORDER - 1].emplace_back(0);
+    free_area[MAX_ORDER].emplace_back(0);
     BuddyChunk* buddy_chunk = new BuddyChunk(buddy_base, kBuddyPageSize, false, MAX_ORDER, 0);
     ptr_to_budchunk.emplace(buddy_base, buddy_chunk);
 
@@ -163,7 +163,9 @@ void* BuddyMemoryAllocator::HashSegAlloc() {
 
 int BuddyMemoryAllocator::GetOrder(int page_size) {
     int order = 0;
-    for (; page_size; page_size >>= 1) {
+    int n = 1;
+    while(n < page_size) {
+        n <<= 1;
         order++;
     }
     return order;
@@ -175,23 +177,33 @@ void* BuddyMemoryAllocator::BuddyAlloc(int num_pages, int node) {
         if (free_area[order].empty()) {
             continue;
         }
-        size_t size = buddy_bin_size_table[order];
-        UpdateStatus(size);
+        size_t fit_size = buddy_bin_size_table[fit_order];
+        UpdateStatus(fit_size);
         // get the page index of the first page in the free block
         int page_index = free_area[order].front();
         free_area[order].pop_front();
         // get the pointer pointing to the start of the free block
         void* mem_ptr = reinterpret_cast<void*>(buddy_base + PageSizeToBytes(page_index));
-        BuddyChunk* fit_chunk = new BuddyChunk(mem_ptr, size, true, order, page_index);
+        BuddyChunk* fit_chunk = ptr_to_budchunk[mem_ptr];
+        fit_chunk->set(mem_ptr, fit_size, true, fit_order, page_index);
         ptr_to_budchunk.emplace(fit_chunk->mem_ptr, fit_chunk);
         // if allocated size greater than request size, split free block
-        if (size > num_pages) {
-           for (; order >= fit_order; order--) {
-               size >>= 1;
-               page_index += size;
-               free_area[order].emplace_back(page_index);
-           }
+        if (order > fit_order) {
+            size_t size = buddy_bin_size_table[order - 1];
+            page_index += size;
+            while (order > fit_order) {
+                order--;
+                void* ptr = reinterpret_cast<void*>(buddy_base + PageSizeToBytes(page_index));
+                // cout << "size:" << size << " index:" << page_index << " order:" << order
+                //      << " ptr:" << ((long)ptr) / (512*1024) << endl;
+                BuddyChunk* chunk = new BuddyChunk(ptr, size, false, order, page_index);
+                ptr_to_budchunk.emplace(ptr, chunk);
+                free_area[order].emplace_back(page_index);
+                size >>= 1;
+                page_index -= size;
+            }
         }
+        // cout << "ptr:" << ((long)fit_chunk->mem_ptr) / (512*1024) << endl;
         return fit_chunk->mem_ptr;
     }
     return nullptr;

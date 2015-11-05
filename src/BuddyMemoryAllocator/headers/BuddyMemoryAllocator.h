@@ -24,6 +24,8 @@
 #include <vector>
 #include <mutex>
 
+#include <gtest/gtest.h>
+
 #include "MmapAllocator.h"
 // Below 3 headers need for constant used for defining fixed hash size HASH_SEG_SIZE
 #include "HashTableMacros.h"
@@ -68,7 +70,15 @@
 
 
 class BuddyMemoryAllocator {
-private:
+
+#ifdef GUNIT_TEST
+    friend class AllocatorTest;
+    FRIEND_TEST(AllocatorTest, GetBuddyOrder);
+    FRIEND_TEST(AllocatorTest, BuddyAllocate);
+    FRIEND_TEST(AllocatorTest, HashSegAllocate);
+    FRIEND_TEST(AllocatorTest, BstAllocate);
+#endif
+
     std::mutex mtx_;
     bool is_initialized_;
     int allocated_pages_;
@@ -174,7 +184,7 @@ public:
 // we don't have any such usage, static object can be defined outside this function
 // and can be used directly. But to be safe, it's good this way
 inline
-BuddyMemoryAllocator& GetAllocator(void){
+BuddyMemoryAllocator& BuddyMemoryAllocator::GetAllocator(void){
     static BuddyMemoryAllocator* singleton = new BuddyMemoryAllocator();
     return *singleton;
 }
