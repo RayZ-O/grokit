@@ -88,9 +88,11 @@ size_t BuddyMemoryAllocator::PageSizeToBytes(int page_size) {
     return static_cast<size_t>(page_size) << ALLOC_PAGE_SIZE_EXPONENT;
 }
 
-int BuddyMemoryAllocator::BuddyBlockSize(int order) {
-    return 1 << order;
+void* BuddyMemoryAllocator::PtrSeek(void* ptr, int num_pages) {
+    char* res = reinterpret_cast<char*>(ptr) + PageSizeToBytes(num_pages);
+    return reinterpret_cast<void*>(res);
 }
+
 
 void BuddyMemoryAllocator::HeapInit() {
     is_initialized_ = true;
@@ -104,12 +106,12 @@ void BuddyMemoryAllocator::HeapInit() {
     // number of nodes * INIT_HEAP_PAGE_SIZE
     free_pages_ = INIT_HEAP_PAGE_SIZE;
     // initalized buddy system
-    buddy_base = reinterpret_cast<char*>(new_chunk);
+    buddy_base = new_chunk;
     free_area[MAX_ORDER].emplace_back(0);
-    BuddyChunk* buddy_chunk = new BuddyChunk(buddy_base, kBuddyPageSize, false, MAX_ORDER, 0);
+    BuddyChunk* buddy_chunk = GetBuddyChunk(buddy_base, kBuddyPageSize, false, MAX_ORDER, 0);
     ptr_to_budchunk.emplace(buddy_base, buddy_chunk);
 
-    void* tree_base = reinterpret_cast<void*>(buddy_base + PageSizeToBytes(kBuddyPageSize));
+    void* tree_base = PtrSeek(buddy_base, kBuddyPageSize);
     int tree_size = INIT_HEAP_PAGE_SIZE - kBuddyPageSize;
 
     free_tree.emplace(tree_size, tree_base);
@@ -146,7 +148,7 @@ void* BuddyMemoryAllocator::HashSegAlloc() {
     void* res_ptr = nullptr;
     if (reserved_hash_segs.empty()) {
         // may use page aligned size
-        void* res_ptr = SYS_MMAP_ALLOC(kHashSegAlignedSize);
+        res_ptr = SYS_MMAP_ALLOC(kHashSegAlignedSize);
         if (!SYS_MMAP_CHECK(res_ptr)){
             perror("BuddyMemoryAllocator");
             FATAL("The memory allocator could not allocate memory");
@@ -171,6 +173,19 @@ int BuddyMemoryAllocator::GetOrder(int page_size) {
     return order;
 }
 
+BuddyMemoryAllocator::BuddyChunk*
+BuddyMemoryAllocator::GetBuddyChunk(void* ptr, int size, bool used, int order, int idx) {
+    BuddyChunk* chunk = nullptr;
+    if (budchunk_pool.empty())
+        chunk = new BuddyChunk(ptr, size, used, order, idx);
+    else {
+        chunk = budchunk_pool.back();
+        budchunk_pool.pop_back();
+        chunk->set(ptr, size, used, order, idx);
+    }
+    return chunk;
+}
+
 void* BuddyMemoryAllocator::BuddyAlloc(int num_pages, int node) {
     int fit_order = GetOrder(num_pages);
     for (int order = fit_order; order <= MAX_ORDER; order++) {
@@ -183,7 +198,7 @@ void* BuddyMemoryAllocator::BuddyAlloc(int num_pages, int node) {
         int page_index = free_area[order].front();
         free_area[order].pop_front();
         // get the pointer pointing to the start of the free block
-        void* mem_ptr = reinterpret_cast<void*>(buddy_base + PageSizeToBytes(page_index));
+        void* mem_ptr = PtrSeek(buddy_base, page_index);
         BuddyChunk* fit_chunk = ptr_to_budchunk[mem_ptr];
         fit_chunk->set(mem_ptr, fit_size, true, fit_order, page_index);
         ptr_to_budchunk.emplace(fit_chunk->mem_ptr, fit_chunk);
@@ -193,17 +208,15 @@ void* BuddyMemoryAllocator::BuddyAlloc(int num_pages, int node) {
             page_index += size;
             while (order > fit_order) {
                 order--;
-                void* ptr = reinterpret_cast<void*>(buddy_base + PageSizeToBytes(page_index));
-                // cout << "size:" << size << " index:" << page_index << " order:" << order
-                //      << " ptr:" << ((long)ptr) / (512*1024) << endl;
-                BuddyChunk* chunk = new BuddyChunk(ptr, size, false, order, page_index);
+                void* ptr = PtrSeek(buddy_base, page_index);
+                BuddyChunk* chunk = GetBuddyChunk(ptr, size, false, order, page_index);
+                assert(chunk);
                 ptr_to_budchunk.emplace(ptr, chunk);
                 free_area[order].emplace_back(page_index);
                 size >>= 1;
                 page_index -= size;
             }
         }
-        // cout << "ptr:" << ((long)fit_chunk->mem_ptr) / (512*1024) << endl;
         return fit_chunk->mem_ptr;
     }
     return nullptr;
@@ -214,28 +227,27 @@ void* BuddyMemoryAllocator::BuddyAlloc(int num_pages, int node) {
     if (it == free_tree.end()) {
         return nullptr;
     } else {
-        BSTreeChunk* alloc_chunk = ptr_to_bstchunk[it->second];
-        // if exactly same size free block is found
-        if (it->first == num_pages) {
-            alloc_chunk->used = true;
-            free_tree.erase(it);
-        } else {
+        int size = it->first;
+        void* fit_ptr = it->second;
+        free_tree.erase(it);
+        BSTreeChunk* &alloc_chunk = ptr_to_bstchunk[fit_ptr];
+        alloc_chunk->set(fit_ptr, num_pages, true);
+        if (size > num_pages) {
             // if the selected free block is larger than the request size
             // get the pointer to the beginning of the remain free size and insert into free tree
-            void* remain = reinterpret_cast<void*>(reinterpret_cast<char*>(alloc_chunk->mem_ptr) +
-                                                   PageSizeToBytes(num_pages));
-            int remain_size = it->first - num_pages;
+            void* remain = PtrSeek(alloc_chunk->mem_ptr, num_pages);
+            int remain_size = size - num_pages;
             free_tree.emplace(remain_size, remain);
-
             BSTreeChunk* remain_chunk = new BSTreeChunk(remain, remain_size, false);
-            alloc_chunk->next = remain_chunk;
+            remain_chunk->next = alloc_chunk->next;
             remain_chunk->prev = alloc_chunk;
+            alloc_chunk->next = remain_chunk;
             ptr_to_bstchunk.emplace(remain, remain_chunk);
         }
         UpdateStatus(num_pages);
         return alloc_chunk->mem_ptr;
     }
- }
+}
 
 void BuddyMemoryAllocator::MmapChangeProt(void* ptr, int prot) {
     if (!ptr) {
@@ -283,22 +295,25 @@ void BuddyMemoryAllocator::BuddyFree(void* ptr) {
     int order = cur_chunk->order;
     UpdateStatus(-buddy_bin_size_table[order]);
     int page_index = cur_chunk->page_index;
-    void* beg_ptr = cur_chunk->mem_ptr;
-    int beg_index = page_index;
-    for (; order <= MAX_ORDER; order++) {
+    while (order <= MAX_ORDER) {
         int buddy_index = page_index ^ (1 << order);
-        void* buddy_ptr = reinterpret_cast<void*>(buddy_base + PageSizeToBytes(buddy_index));
-        if (ptr_to_budchunk.find(buddy_ptr) == ptr_to_budchunk.end() ||
-            ptr_to_budchunk[buddy_ptr]->used != false ||
-            ptr_to_budchunk[buddy_ptr]->order != order) {
+        void* buddy_ptr = PtrSeek(buddy_base, buddy_index);
+        if (ptr_to_budchunk.find(buddy_ptr) == ptr_to_budchunk.end() || // buddy pointer not in pointer map
+            ptr_to_budchunk[buddy_ptr]->used != false ||   // buddy chunk in use
+            ptr_to_budchunk[buddy_ptr]->order != order) {  // buddy chunk not in the same order
             break;
         }
+        // collect unused buddy chunk to buddy chunk pool to avoid frequently allocating and deallocating
+        budchunk_pool.push_back(ptr_to_budchunk[buddy_ptr]);
         ptr_to_budchunk.erase(buddy_ptr);
-        beg_ptr = min(beg_ptr, buddy_ptr);
-        beg_index = min(beg_index, buddy_index);
+        free_area[order].remove(buddy_index);
+        // get the beginning index of the coalesced chunk
         page_index &= buddy_index;
+        order++;
     }
-    cur_chunk->set(beg_ptr, buddy_bin_size_table[order], false, order, beg_index);
+    free_area[order].push_front(page_index);
+    void* beg_ptr = PtrSeek(buddy_base, page_index);
+    cur_chunk->set(beg_ptr, buddy_bin_size_table[order], false, order, page_index);
     ptr_to_budchunk.emplace(beg_ptr, cur_chunk);
 }
 

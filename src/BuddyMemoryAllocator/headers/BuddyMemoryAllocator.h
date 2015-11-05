@@ -75,8 +75,10 @@ class BuddyMemoryAllocator {
     friend class AllocatorTest;
     FRIEND_TEST(AllocatorTest, GetBuddyOrder);
     FRIEND_TEST(AllocatorTest, BuddyAllocate);
-    FRIEND_TEST(AllocatorTest, HashSegAllocate);
+    FRIEND_TEST(AllocatorTest, BuddyFree);
     FRIEND_TEST(AllocatorTest, BstAllocate);
+    FRIEND_TEST(AllocatorTest, BstFree);
+    FRIEND_TEST(AllocatorTest, HashSegTest);
 #endif
 
     std::mutex mtx_;
@@ -97,7 +99,9 @@ class BuddyMemoryAllocator {
         bool used;
         int order;
         int page_index;
+
         BuddyChunk(void* ptr, int s, bool u, int o, int i) : mem_ptr(ptr), size(s), used(u), order(o), page_index(i) { }
+
         void set(void* ptr, int s, bool u, int o, int i) {
             mem_ptr = ptr;
             size = s;
@@ -105,6 +109,17 @@ class BuddyMemoryAllocator {
             order = o;
             page_index = i;
         }
+
+#ifdef GUNIT_TEST
+        friend std::ostream& operator <<(std::ostream &output, BuddyChunk &chunk) {
+            output << "pointer:" << ((long)chunk.mem_ptr) / (512*1024) << std::endl;
+            output << "size:" << chunk.size << std::endl;
+            output << "used:" << (chunk.used ? "true" : "false") << std::endl;
+            output << "order:" << chunk.order << std::endl;
+            output << "page index:" << chunk.page_index << std::endl;
+            return output;
+        }
+#endif
     };
     // binary search tree chunk
     struct BSTreeChunk {
@@ -113,13 +128,31 @@ class BuddyMemoryAllocator {
         bool used;
         BSTreeChunk* prev; // pointer to previous physical chunk
         BSTreeChunk* next;
+
         BSTreeChunk(void* ptr, int s, bool u) : mem_ptr(ptr), size(s), used(u), prev(nullptr), next(nullptr) { }
+
+        void set(void* ptr, int s, bool u) {
+            mem_ptr = ptr;
+            size = s;
+            used = u;
+        }
+
+#ifdef GUNIT_TEST
+        friend std::ostream& operator <<(std::ostream &output, BSTreeChunk &chunk) {
+            output << "pointer:" << ((long)chunk.mem_ptr) / (512*1024) << std::endl;
+            output << "size:" << chunk.size << std::endl;
+            output << "used:" << (chunk.used ? "true" : "false") << std::endl;
+            output << "prev:" << (chunk.prev ? (long)chunk.prev->mem_ptr / (512*1024) : 0) << std::endl;
+            output << "next:" << (chunk.next ? (long)chunk.next->mem_ptr / (512*1024) : 0) << std::endl;
+            return output;
+        }
+#endif
     };
 
     // buddy bin size look up table
     std::vector<int> buddy_bin_size_table;
     // point to the beginning of buddy memory
-    char* buddy_base;
+    void* buddy_base;
     // reserve fixed size chunk for hash entry
     std::vector<void*> reserved_hash_segs;
     // array of free list in buddy system
@@ -133,11 +166,17 @@ class BuddyMemoryAllocator {
     std::unordered_map<void*, BuddyChunk*> ptr_to_budchunk;
     std::unordered_map<void*, BSTreeChunk*> ptr_to_bstchunk;
 
+    std::vector<BuddyChunk*> budchunk_pool;
+
+    BuddyChunk* GetBuddyChunk(void* ptr, int size, bool used, int order, int idx);
+
+    int GetOrder(int page_size);
+
+    void* PtrSeek(void* ptr, int num_pages);
+
     int BytesToPageSize(size_t bytes);
 
     size_t PageSizeToBytes(int page_size);
-
-    int GetOrder(int page_size);
 
     void UpdateStatus(int allocated_size);
 
