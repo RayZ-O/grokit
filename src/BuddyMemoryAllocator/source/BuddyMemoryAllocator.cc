@@ -70,7 +70,6 @@ BuddyMemoryAllocator::BuddyMemoryAllocator(void)
     free_area.resize(MAX_ORDER + 1);
 }
 
-
 BuddyMemoryAllocator::~BuddyMemoryAllocator(void) {
 
 }
@@ -92,7 +91,6 @@ void* BuddyMemoryAllocator::PtrSeek(void* ptr, int num_pages) {
     char* res = reinterpret_cast<char*>(ptr) + PageSizeToBytes(num_pages);
     return reinterpret_cast<void*>(res);
 }
-
 
 void BuddyMemoryAllocator::HeapInit() {
     is_initialized_ = true;
@@ -328,8 +326,9 @@ void BuddyMemoryAllocator::BSTreeFree(void* ptr) {
     // iterative coalesce with previous chunk if it is free
     BSTreeChunk* prevChunk = cur_chunk->prev;
     while (prevChunk) {
-        if (true == prevChunk->used)
+        if (prevChunk->used)
             break;
+        ptr_to_bstchunk.erase(prevChunk->mem_ptr);
         size += prevChunk->size;
         // update beginning pointer
         beg_ptr = prevChunk->mem_ptr;
@@ -338,12 +337,12 @@ void BuddyMemoryAllocator::BSTreeFree(void* ptr) {
     // iterative coalesce with next chunk if it is free
     BSTreeChunk* nextChunk = cur_chunk->next;
     while (nextChunk) {
-        if (true == nextChunk->used)
+        if (nextChunk->used)
             break;
+        ptr_to_bstchunk.erase(nextChunk->mem_ptr);
         size += nextChunk->size;
         nextChunk = nextChunk->next;
     }
-
     free_tree.emplace(size, beg_ptr);
 }
 

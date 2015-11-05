@@ -165,7 +165,7 @@ class BuddyMemoryAllocator {
     std::unordered_set<void*> occupied_hash_segs;
     std::unordered_map<void*, BuddyChunk*> ptr_to_budchunk;
     std::unordered_map<void*, BSTreeChunk*> ptr_to_bstchunk;
-
+    // object pool for buddy chunk to avoid frequently new and delete
     std::vector<BuddyChunk*> budchunk_pool;
 
     BuddyChunk* GetBuddyChunk(void* ptr, int size, bool used, int order, int idx);

@@ -77,7 +77,6 @@ void AllocatorTest::PrintFreeTree() {
         assert(p.second);
         cout << aloc.ptr_to_bstchunk[p.second] << endl;
     }
-
 }
 
 TEST_F(AllocatorTest, GetBuddyOrder) {
@@ -141,7 +140,19 @@ TEST_F(AllocatorTest, BstAllocate) {
 }
 
 TEST_F(AllocatorTest, BstFree) {
-
+    void* ptr1 = aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 10), node, filename, linenum);
+    EXPECT_TRUE(ptr1 != nullptr);
+    void* ptr2 = aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 20), node, filename, linenum);
+    EXPECT_TRUE(ptr2 != nullptr);
+    void* ptr3 = aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 30), node, filename, linenum);
+    EXPECT_TRUE(ptr3 != nullptr);
+    EXPECT_EQ(4, aloc.ptr_to_bstchunk.size());
+    aloc.MmapFree(ptr2);
+    EXPECT_EQ(4, aloc.ptr_to_bstchunk.size());
+    aloc.MmapFree(ptr3);
+    EXPECT_EQ(2, aloc.ptr_to_bstchunk.size());
+    aloc.MmapFree(ptr1);
+    EXPECT_EQ(1, aloc.ptr_to_bstchunk.size());
 }
 
 TEST_F(AllocatorTest, HashSegTest) {
