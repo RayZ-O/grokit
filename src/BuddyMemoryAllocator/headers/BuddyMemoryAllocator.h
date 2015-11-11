@@ -65,25 +65,20 @@
 
 // Maximum order in the buddy system
 #define MAX_ORDER 10
-// Use buddy allocation when the request under threshold, otherwise use binary search tree
-#define BUDDY_PAGE_SIZE 1 << MAX_ORDER
-
 
 class BuddyMemoryAllocator {
 
 #ifdef GUNIT_TEST
+    // declare friend to test private member of allocator class
     friend class AllocatorTest;
-    FRIEND_TEST(AllocatorTest, GetBuddyOrder);
-    FRIEND_TEST(AllocatorTest, BuddyAllocate);
-    FRIEND_TEST(AllocatorTest, BuddyFree);
-    FRIEND_TEST(AllocatorTest, BstAllocate);
-    FRIEND_TEST(AllocatorTest, BstFree);
-    FRIEND_TEST(AllocatorTest, HashSegTest);
 #endif
-
+    // mutex used to make the allocater thread safe
     std::mutex mtx_;
+    // mark if the internal data structures are initialized
     bool is_initialized_;
+    // number of allocated pages
     int allocated_pages_;
+    // number of free pages
     int free_pages_;
     // STYLE google code style constant naming
     // page size of hash segment
@@ -95,10 +90,10 @@ class BuddyMemoryAllocator {
     // buddy system chunk
     struct BuddyChunk {
         void* mem_ptr;
-        int size;
+        int size;      // size of the chunk, may be larger than the request size(internal fragment)
         bool used;
-        int order;
-        int page_index;
+        int order;     // TODO size is not necessary if order is stored
+        int page_index;  // offset from mem_ptr to buddy system base pointer in page size
 
         BuddyChunk(void* ptr, int s, bool u, int o, int i) : mem_ptr(ptr), size(s), used(u), order(o), page_index(i) { }
 
@@ -127,7 +122,7 @@ class BuddyMemoryAllocator {
         int size;
         bool used;
         BSTreeChunk* prev; // pointer to previous physical chunk
-        BSTreeChunk* next;
+        BSTreeChunk* next; // pointer to next physical chunk
 
         BSTreeChunk(void* ptr, int s, bool u) : mem_ptr(ptr), size(s), used(u), prev(nullptr), next(nullptr) { }
 
@@ -167,20 +162,18 @@ class BuddyMemoryAllocator {
     std::unordered_map<void*, BSTreeChunk*> ptr_to_bstchunk;
     // object pool for buddy chunk to avoid frequently new and delete
     std::vector<BuddyChunk*> budchunk_pool;
-
+    // get buddy chunk from chunk pool, if the pool is empty, allocate a new one
     BuddyChunk* GetBuddyChunk(void* ptr, int size, bool used, int order, int idx);
 
     int GetOrder(int page_size);
-
+    // get pointer that point to num_pages(convert to bytes) behind ptr
     void* PtrSeek(void* ptr, int num_pages);
 
     int BytesToPageSize(size_t bytes);
 
     size_t PageSizeToBytes(int page_size);
-
+    // update number of allocated pages and free pages
     void UpdateStatus(int allocated_size);
-
-    int BuddyBlockSize(int order);
 
     void HeapInit();
 

@@ -237,6 +237,7 @@ void* BuddyMemoryAllocator::BuddyAlloc(int num_pages, int node) {
             int remain_size = size - num_pages;
             free_tree.emplace(remain_size, remain);
             BSTreeChunk* remain_chunk = new BSTreeChunk(remain, remain_size, false);
+            // insert remain chunk into sibling list
             remain_chunk->next = alloc_chunk->next;
             remain_chunk->prev = alloc_chunk;
             alloc_chunk->next = remain_chunk;
@@ -294,7 +295,7 @@ void BuddyMemoryAllocator::BuddyFree(void* ptr) {
     UpdateStatus(-buddy_bin_size_table[order]);
     int page_index = cur_chunk->page_index;
     while (order <= MAX_ORDER) {
-        int buddy_index = page_index ^ (1 << order);
+        int buddy_index = page_index ^ buddy_bin_size_table[order];
         void* buddy_ptr = PtrSeek(buddy_base, buddy_index);
         if (ptr_to_budchunk.find(buddy_ptr) == ptr_to_budchunk.end() || // buddy pointer not in pointer map
             ptr_to_budchunk[buddy_ptr]->used != false ||   // buddy chunk in use

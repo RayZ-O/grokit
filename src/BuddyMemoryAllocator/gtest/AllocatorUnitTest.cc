@@ -29,22 +29,30 @@ protected:
         linenum = 0;
     }
 
-    virtual void SetUp() {
+    // virtual void SetUp() {
         // Code here will be called immediately after the constructor (right
         // before each test).
-    }
+    // }
 
-    virtual void TearDown() {
+    // virtual void TearDown() {
         // Code here will be called immediately after each test (right
         // before the destructor).
-    }
+    // }
 
+    // write the tests as members of the fixture class to access private members,
+    // since even though this test fixture is a friend to allocator class, the
+    // tests(sub-classes of the fixture) are not automatically friends to it
+    void GetBuddyOrderTest();
+    void BuddyAllocateTest();
+    void BuddyFreeTest();
+    void BstAllocateTest();
+    void BstFreeTest();
+    void HashSegTest();
+
+    // pretty print the internal data structure infomation
     void PrintBuddyPtrMap();
-
     void PrintBSTPtrMap();
-
     void PrintFreeArea();
-
     void PrintFreeTree();
 };
 
@@ -79,7 +87,7 @@ void AllocatorTest::PrintFreeTree() {
     }
 }
 
-TEST_F(AllocatorTest, GetBuddyOrder) {
+void AllocatorTest::GetBuddyOrderTest() {
     EXPECT_EQ(0, aloc.GetOrder(1));
     EXPECT_EQ(1, aloc.GetOrder(2));
     EXPECT_EQ(2, aloc.GetOrder(3));
@@ -91,7 +99,7 @@ TEST_F(AllocatorTest, GetBuddyOrder) {
     EXPECT_EQ(8, aloc.GetOrder(254));
 }
 
-TEST_F(AllocatorTest, BuddyAllocate) {
+void AllocatorTest::BuddyAllocateTest() {
     EXPECT_TRUE(aloc.MmapAlloc(0_page, node, filename, linenum) == nullptr);
     EXPECT_TRUE(aloc.MmapAlloc(1_page, node, filename, linenum) != nullptr);
     for (int i = 0; i < MAX_ORDER; i++) {
@@ -106,7 +114,7 @@ TEST_F(AllocatorTest, BuddyAllocate) {
     EXPECT_EQ(17, aloc.AllocatedPages());
 }
 
-TEST_F(AllocatorTest, BuddyFree) {
+void AllocatorTest::BuddyFreeTest() {
     void* ptr1 = aloc.MmapAlloc(1_page, node, filename, linenum);
     EXPECT_TRUE(ptr1 != nullptr);
     aloc.MmapFree(ptr1);
@@ -124,7 +132,7 @@ TEST_F(AllocatorTest, BuddyFree) {
     }
 }
 
-TEST_F(AllocatorTest, BstAllocate) {
+void AllocatorTest::BstAllocateTest() {
     EXPECT_TRUE(aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 1), node, filename, linenum) != nullptr);
     EXPECT_EQ(2, aloc.ptr_to_bstchunk.size());
     EXPECT_TRUE(aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 10), node, filename, linenum) != nullptr);
@@ -139,7 +147,7 @@ TEST_F(AllocatorTest, BstAllocate) {
     }
 }
 
-TEST_F(AllocatorTest, BstFree) {
+void AllocatorTest::BstFreeTest() {
     void* ptr1 = aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 10), node, filename, linenum);
     EXPECT_TRUE(ptr1 != nullptr);
     void* ptr2 = aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 20), node, filename, linenum);
@@ -155,7 +163,7 @@ TEST_F(AllocatorTest, BstFree) {
     EXPECT_EQ(1, aloc.ptr_to_bstchunk.size());
 }
 
-TEST_F(AllocatorTest, HashSegTest) {
+void AllocatorTest::HashSegTest() {
     void* ptr1 = aloc.MmapAlloc(PageToBytes(aloc.kHashSegPageSize), node, filename, linenum);
     EXPECT_TRUE(ptr1 != nullptr);
     EXPECT_EQ(1, aloc.occupied_hash_segs.size());
@@ -166,6 +174,13 @@ TEST_F(AllocatorTest, HashSegTest) {
     EXPECT_EQ(1, aloc.reserved_hash_segs.size());
     EXPECT_EQ(0, aloc.AllocatedPages());
 }
+
+TEST_F(AllocatorTest, GetBuddyOrderTest) { GetBuddyOrderTest(); }
+TEST_F(AllocatorTest, BuddyAllocateTest) { BuddyAllocateTest(); }
+TEST_F(AllocatorTest, BuddyFreeTest) { BuddyFreeTest(); }
+TEST_F(AllocatorTest, BstAllocateTest) { BstAllocateTest(); }
+TEST_F(AllocatorTest, BstFreeTest) { BstFreeTest(); }
+TEST_F(AllocatorTest, HashSegTest) { HashSegTest(); }
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest( &argc, argv );
