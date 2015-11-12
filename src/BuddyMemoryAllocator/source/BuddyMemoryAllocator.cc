@@ -119,7 +119,7 @@ void BuddyMemoryAllocator::HeapInit() {
 }
 
 void* BuddyMemoryAllocator::MmapAlloc(size_t num_bytes, int node, const char* f, int l) {
-    if (0 >= num_bytes)
+    if (0 == num_bytes)
         return nullptr;
 
     lock_guard<mutex> lck(mtx_);
@@ -197,9 +197,7 @@ void* BuddyMemoryAllocator::BuddyAlloc(int num_pages, int node) {
         free_area[order].pop_front();
         // get the pointer pointing to the start of the free block
         void* mem_ptr = PtrSeek(buddy_base, page_index);
-        BuddyChunk* fit_chunk = ptr_to_budchunk[mem_ptr];
-        fit_chunk->set(mem_ptr, fit_size, true, fit_order, page_index);
-        ptr_to_budchunk.emplace(fit_chunk->mem_ptr, fit_chunk);
+        ptr_to_budchunk[mem_ptr]->set(mem_ptr, fit_size, true, fit_order, page_index);
         // if allocated size greater than request size, split free block
         if (order > fit_order) {
             size_t size = buddy_bin_size_table[order - 1];
@@ -215,7 +213,7 @@ void* BuddyMemoryAllocator::BuddyAlloc(int num_pages, int node) {
                 page_index -= size;
             }
         }
-        return fit_chunk->mem_ptr;
+        return mem_ptr;
     }
     return nullptr;
 }
@@ -306,11 +304,12 @@ void BuddyMemoryAllocator::BuddyFree(void* ptr) {
     while (order <= MAX_ORDER) {
         int buddy_index = page_index ^ buddy_bin_size_table[order];
         void* buddy_ptr = PtrSeek(buddy_base, buddy_index);
-        if (ptr_to_budchunk.find(buddy_ptr) == ptr_to_budchunk.end() || // buddy pointer not in pointer map
-            ptr_to_budchunk[buddy_ptr]->used != false ||   // buddy chunk in use
-            ptr_to_budchunk[buddy_ptr]->order != order) {  // buddy chunk not in the same order
+        if (ptr_to_budchunk.find(buddy_ptr) == ptr_to_budchunk.end()) // buddy pointer not in pointer map
             break;
-        }
+        if (ptr_to_budchunk[buddy_ptr]->used != false) // buddy chunk in use
+            break;
+        if (ptr_to_budchunk[buddy_ptr]->order != order)   // buddy chunk not in the same order
+            break;
         // collect unused buddy chunk to buddy chunk pool to avoid frequently allocating and deallocating
         budchunk_pool.push_back(ptr_to_budchunk[buddy_ptr]);
         ptr_to_budchunk.erase(buddy_ptr);
@@ -319,6 +318,7 @@ void BuddyMemoryAllocator::BuddyFree(void* ptr) {
         page_index &= buddy_index;
         order++;
     }
+    ptr_to_budchunk.erase(ptr);
     free_area[order].push_front(page_index);
     void* beg_ptr = PtrSeek(buddy_base, page_index);
     cur_chunk->set(beg_ptr, buddy_bin_size_table[order], false, order, page_index);
