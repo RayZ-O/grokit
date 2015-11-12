@@ -86,7 +86,7 @@ class BuddyMemoryAllocator {
     // page aligned hash segment size
     const size_t kHashSegAlignedSize;
     // Use buddy allocation when the request under threshold, otherwise use binary search tree
-    const int kBuddyPageSize;
+    const int kBuddyHeapSize;
     // buddy system chunk
     struct BuddyChunk {
         void* mem_ptr;
@@ -126,10 +126,12 @@ class BuddyMemoryAllocator {
 
         BSTreeChunk(void* ptr, int s, bool u) : mem_ptr(ptr), size(s), used(u), prev(nullptr), next(nullptr) { }
 
-        void set(void* ptr, int s, bool u) {
+        void set(void* ptr, int s, bool u, BSTreeChunk* p = nullptr, BSTreeChunk* n = nullptr) {
             mem_ptr = ptr;
             size = s;
             used = u;
+            if (p) prev = p;
+            if (n) next = n;
         }
 
 #ifdef GUNIT_TEST
@@ -154,7 +156,7 @@ class BuddyMemoryAllocator {
     // TODO vector + reserve may be faster than list
     std::vector<std::list<int>> free_area;
     // binary search tree of free list
-    std::multimap<int, void*> free_tree;
+    std::map<int, std::unordered_set<void*>> free_tree;
 
     // store chunk info in external data structure to avoid breaking DMA
     std::unordered_set<void*> occupied_hash_segs;
@@ -168,6 +170,8 @@ class BuddyMemoryAllocator {
     int GetOrder(int page_size);
     // get pointer that point to num_pages(convert to bytes) behind ptr
     void* PtrSeek(void* ptr, int num_pages);
+    // erase pointer in the given size set in free tree
+    void EraseTreePtr(int size, void* ptr);
 
     int BytesToPageSize(size_t bytes);
 

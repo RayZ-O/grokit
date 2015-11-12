@@ -63,7 +63,7 @@ BuddyMemoryAllocator::BuddyMemoryAllocator(void)
       free_pages_(0),
       kHashSegPageSize(BytesToPageSize(HASH_SEG_SIZE)),
       kHashSegAlignedSize(PageSizeToBytes(kHashSegPageSize)),
-      kBuddyPageSize(1 << MAX_ORDER) {
+      kBuddyHeapSize(1 << MAX_ORDER) {
     for (int order = 0; order <= MAX_ORDER; order++) {
         buddy_bin_size_table.push_back(1 << order);
     }
@@ -106,20 +106,20 @@ void BuddyMemoryAllocator::HeapInit() {
     // initalized buddy system
     buddy_base = new_chunk;
     free_area[MAX_ORDER].emplace_back(0);
-    BuddyChunk* buddy_chunk = GetBuddyChunk(buddy_base, kBuddyPageSize, false, MAX_ORDER, 0);
+    BuddyChunk* buddy_chunk = GetBuddyChunk(buddy_base, kBuddyHeapSize, false, MAX_ORDER, 0);
     ptr_to_budchunk.emplace(buddy_base, buddy_chunk);
 
-    void* tree_base = PtrSeek(buddy_base, kBuddyPageSize);
-    int tree_size = INIT_HEAP_PAGE_SIZE - kBuddyPageSize;
+    void* tree_base = PtrSeek(buddy_base, kBuddyHeapSize);
+    int tree_size = INIT_HEAP_PAGE_SIZE - kBuddyHeapSize;
 
-    free_tree.emplace(tree_size, tree_base);
+    free_tree[tree_size].insert(tree_base);
 
     BSTreeChunk* tree_chunk = new BSTreeChunk(tree_base, tree_size, false);
     ptr_to_bstchunk.emplace(tree_base, tree_chunk);
 }
 
 void* BuddyMemoryAllocator::MmapAlloc(size_t num_bytes, int node, const char* f, int l) {
-    if (0 == num_bytes)
+    if (0 >= num_bytes)
         return nullptr;
 
     lock_guard<mutex> lck(mtx_);
@@ -133,7 +133,7 @@ void* BuddyMemoryAllocator::MmapAlloc(size_t num_bytes, int node, const char* f,
     if (kHashSegPageSize == num_pages) {
         return HashSegAlloc();
     }
-    if (num_pages <= kBuddyPageSize) {
+    if (num_pages <= kBuddyHeapSize) {
         res_ptr = BuddyAlloc(num_pages, node);
     }
     if (!res_ptr) {
@@ -157,7 +157,7 @@ void* BuddyMemoryAllocator::HashSegAlloc() {
     }
     occupied_hash_segs.emplace(res_ptr);
     SYS_MMAP_PROT(res_ptr, kHashSegAlignedSize, PROT_READ | PROT_WRITE);
-    UpdateStatus(kHashSegPageSize);
+    // UpdateStatus(kHashSegPageSize);
     return res_ptr;
 }
 
@@ -208,7 +208,7 @@ void* BuddyMemoryAllocator::BuddyAlloc(int num_pages, int node) {
                 order--;
                 void* ptr = PtrSeek(buddy_base, page_index);
                 BuddyChunk* chunk = GetBuddyChunk(ptr, size, false, order, page_index);
-                assert(chunk);
+                assert(chunk != nullptr);
                 ptr_to_budchunk.emplace(ptr, chunk);
                 free_area[order].emplace_back(page_index);
                 size >>= 1;
@@ -220,22 +220,32 @@ void* BuddyMemoryAllocator::BuddyAlloc(int num_pages, int node) {
     return nullptr;
 }
 
- void* BuddyMemoryAllocator::BSTreeAlloc(int num_pages, int node) {
+void BuddyMemoryAllocator::EraseTreePtr(int size, void* ptr) {
+    auto it = free_tree.find(size);
+    if (it->second.size() == 1)
+        free_tree.erase(it);
+    else
+        it->second.erase(ptr);
+}
+
+void* BuddyMemoryAllocator::BSTreeAlloc(int num_pages, int node) {
     auto it = free_tree.lower_bound(num_pages);
     if (it == free_tree.end()) {
         return nullptr;
     } else {
         int size = it->first;
-        void* fit_ptr = it->second;
-        free_tree.erase(it);
+        unordered_set<void*> &ptrs = it->second;
+        void* fit_ptr = *ptrs.begin();
+        EraseTreePtr(size, fit_ptr);
         BSTreeChunk* &alloc_chunk = ptr_to_bstchunk[fit_ptr];
         alloc_chunk->set(fit_ptr, num_pages, true);
         if (size > num_pages) {
             // if the selected free block is larger than the request size
             // get the pointer to the beginning of the remain free size and insert into free tree
-            void* remain = PtrSeek(alloc_chunk->mem_ptr, num_pages);
+            void* remain = PtrSeek(fit_ptr, num_pages);
             int remain_size = size - num_pages;
-            free_tree.emplace(remain_size, remain);
+            assert(remain != nullptr);
+            free_tree[remain_size].insert(remain);
             BSTreeChunk* remain_chunk = new BSTreeChunk(remain, remain_size, false);
             // insert remain chunk into sibling list
             remain_chunk->next = alloc_chunk->next;
@@ -272,15 +282,14 @@ void BuddyMemoryAllocator::MmapChangeProt(void* ptr, int prot) {
 }
 
 void BuddyMemoryAllocator::MmapFree(void* ptr) {
-    if (!ptr) {
+    if (!ptr)
         return;
-    }
 
     lock_guard<mutex> lck(mtx_);
     if (occupied_hash_segs.find(ptr) != occupied_hash_segs.end()) {
         reserved_hash_segs.push_back(ptr);
         occupied_hash_segs.erase(ptr);
-        UpdateStatus(-kHashSegPageSize);
+        // UpdateStatus(-kHashSegPageSize);
     } else if (ptr_to_budchunk.find(ptr) != ptr_to_budchunk.end()) {
         BuddyFree(ptr);
     } else {
@@ -318,33 +327,40 @@ void BuddyMemoryAllocator::BuddyFree(void* ptr) {
 
 void BuddyMemoryAllocator::BSTreeFree(void* ptr) {
     BSTreeChunk* cur_chunk = ptr_to_bstchunk[ptr];
-    cur_chunk->used = false;
-    // point to the beginning of the contiguous memory
-    void* beg_ptr = cur_chunk->mem_ptr;
     // total size of physical contiguous memory
     int size = cur_chunk->size;
     UpdateStatus(-size);
-    // iterative coalesce with previous chunk if it is free
-    BSTreeChunk* prevChunk = cur_chunk->prev;
-    while (prevChunk) {
-        if (prevChunk->used)
-            break;
-        ptr_to_bstchunk.erase(prevChunk->mem_ptr);
-        size += prevChunk->size;
-        // update beginning pointer
-        beg_ptr = prevChunk->mem_ptr;
-        prevChunk = prevChunk->prev;
-    }
     // iterative coalesce with next chunk if it is free
     BSTreeChunk* nextChunk = cur_chunk->next;
     while (nextChunk) {
         if (nextChunk->used)
             break;
+        assert(nextChunk->mem_ptr != nullptr);
+        // assert(free_tree[nextChunk->size].find(nextChunk->mem_ptr) != free_tree[nextChunk->size].end());
+        EraseTreePtr(nextChunk->size, nextChunk->mem_ptr);
+        // assert(ptr_to_bstchunk.find(nextChunk->mem_ptr) != ptr_to_bstchunk.end());
         ptr_to_bstchunk.erase(nextChunk->mem_ptr);
         size += nextChunk->size;
         nextChunk = nextChunk->next;
     }
-    free_tree.emplace(size, beg_ptr);
+    // iterative coalesce with previous chunk if it is free
+    BSTreeChunk* prevChunk = cur_chunk->prev;
+    while (prevChunk) {
+        if (prevChunk->used)
+            break;
+        assert(prevChunk->mem_ptr != nullptr);
+        EraseTreePtr(prevChunk->size, prevChunk->mem_ptr);
+        // assert(ptr_to_bstchunk.find(prevChunk->mem_ptr) != ptr_to_bstchunk.end());
+        ptr_to_bstchunk.erase(prevChunk->mem_ptr);
+        size += prevChunk->size;
+        // the beginning of new coalesce chunk
+        cur_chunk = prevChunk;
+        prevChunk = prevChunk->prev;
+    }
+    ptr_to_bstchunk.erase(ptr);
+    free_tree[size].insert(cur_chunk->mem_ptr);
+    cur_chunk->set(cur_chunk->mem_ptr, size, false, prevChunk, nextChunk);
+    ptr_to_bstchunk.emplace(cur_chunk->mem_ptr, cur_chunk);
 }
 
 void BuddyMemoryAllocator::UpdateStatus(int allocated_size) {

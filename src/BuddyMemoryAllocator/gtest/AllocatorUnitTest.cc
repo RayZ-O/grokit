@@ -18,6 +18,8 @@ int subtract(void* ptr1, void* ptr2) {
 
 class AllocatorTest : public ::testing::Test {
 protected:
+    static constexpr int kBuddyHeapSize = 1 << MAX_ORDER;
+    static constexpr int kBSTHeapSize = INIT_HEAP_PAGE_SIZE - (1 << MAX_ORDER);
     BuddyMemoryAllocator aloc;
     int node;
     char* filename;
@@ -42,6 +44,7 @@ protected:
     // write the tests as members of the fixture class to access private members,
     // since even though this test fixture is a friend to allocator class, the
     // tests(sub-classes of the fixture) are not automatically friends to it
+    void AllocateNonPositiveTest();
     void GetBuddyOrderTest();
     void BuddyAllocateTest();
     void BuddyFreeTest();
@@ -54,26 +57,28 @@ protected:
     void PrintBSTPtrMap();
     void PrintFreeArea();
     void PrintFreeTree();
+    // use the internal data structure to calculate allocated and free pages
+    int GetAllocatedBuddySize();
+    int GetFreeBuddySize();
+    int GetAllocatedBSTSize();
+    int GetFreeBSTSize();
 };
 
 void AllocatorTest::PrintBuddyPtrMap() {
-    for (auto p : aloc.ptr_to_budchunk) {
-        assert(p.second);
+    for (const auto p : aloc.ptr_to_budchunk) {
         cout << *p.second << endl;
     }
 }
 
 void AllocatorTest::PrintBSTPtrMap() {
-    for (auto p : aloc.ptr_to_bstchunk) {
-        assert(p.second);
+    for (const auto p : aloc.ptr_to_bstchunk) {
         cout << *p.second << endl;
     }
 }
 
 void AllocatorTest::PrintFreeArea() {
     for (int i = 0; i < aloc.free_area.size(); i++) {
-        cout << "order:" << i << " index:";
-        for (auto idx : aloc.free_area[i]) {
+        for (int idx : aloc.free_area[i]) {
             cout << idx << " ";
         }
         cout << endl;
@@ -81,10 +86,52 @@ void AllocatorTest::PrintFreeArea() {
 }
 
 void AllocatorTest::PrintFreeTree() {
-    for (auto p : aloc.free_tree) {
-        assert(p.second);
-        cout << aloc.ptr_to_bstchunk[p.second] << endl;
+    for (const auto p : aloc.free_tree) {
+        cout << "size in tree: " << p.first << endl;
+        for (const auto ptr : p.second) {
+            cout << aloc.ptr_to_bstchunk[ptr] << endl;
+        }
+        cout << endl;
     }
+}
+
+int AllocatorTest::GetAllocatedBuddySize() {
+    int size = 0;
+    for (const auto p : aloc.ptr_to_budchunk) {
+        if (p.second->used)
+            size += p.second->size;
+    }
+    return size;
+}
+
+int AllocatorTest::GetFreeBuddySize() {
+    int size = 0;
+    for (int i = 0; i < aloc.free_area.size(); i++) {
+        size += aloc.free_area[i].size() * (1 << i);
+    }
+    return size;
+}
+
+int AllocatorTest::GetAllocatedBSTSize() {
+    int size = 0;
+    for (const auto p : aloc.ptr_to_bstchunk) {
+        if (p.second->used)
+            size += p.second->size;
+    }
+    return size;
+}
+
+int AllocatorTest::GetFreeBSTSize() {
+    int size = 0;
+    for (const auto p : aloc.free_tree) {
+        size += p.first * p.second.size();
+    }
+    return size;
+}
+
+void AllocatorTest::AllocateNonPositiveTest() {
+    // EXPECT_TRUE(aloc.MmapAlloc(0_page, node, filename, linenum) == nullptr);
+    // EXPECT_TRUE(aloc.MmapAlloc(-1, node, filename, linenum) == nullptr);
 }
 
 void AllocatorTest::GetBuddyOrderTest() {
@@ -100,7 +147,6 @@ void AllocatorTest::GetBuddyOrderTest() {
 }
 
 void AllocatorTest::BuddyAllocateTest() {
-    EXPECT_TRUE(aloc.MmapAlloc(0_page, node, filename, linenum) == nullptr);
     EXPECT_TRUE(aloc.MmapAlloc(1_page, node, filename, linenum) != nullptr);
     for (int i = 0; i < MAX_ORDER; i++) {
         EXPECT_EQ(1, aloc.free_area[i].size());
@@ -112,6 +158,8 @@ void AllocatorTest::BuddyAllocateTest() {
     EXPECT_EQ(9, aloc.AllocatedPages());
     EXPECT_TRUE(aloc.MmapAlloc(5_page, node, filename, linenum) != nullptr);
     EXPECT_EQ(17, aloc.AllocatedPages());
+    EXPECT_EQ(aloc.AllocatedPages(), GetAllocatedBuddySize());
+    EXPECT_EQ(kBuddyHeapSize - aloc.AllocatedPages() , GetFreeBuddySize());
 }
 
 void AllocatorTest::BuddyFreeTest() {
@@ -130,14 +178,16 @@ void AllocatorTest::BuddyFreeTest() {
     for (int i = 0; i < MAX_ORDER; i++) {
         EXPECT_EQ(1, aloc.free_area[i].size());
     }
+    EXPECT_EQ(aloc.AllocatedPages(), GetAllocatedBuddySize());
+    EXPECT_EQ(kBuddyHeapSize - aloc.AllocatedPages(), GetFreeBuddySize());
 }
 
 void AllocatorTest::BstAllocateTest() {
-    EXPECT_TRUE(aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 1), node, filename, linenum) != nullptr);
+    EXPECT_TRUE(aloc.MmapAlloc(PageToBytes(aloc.kBuddyHeapSize + 1), node, filename, linenum) != nullptr);
     EXPECT_EQ(2, aloc.ptr_to_bstchunk.size());
-    EXPECT_TRUE(aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 10), node, filename, linenum) != nullptr);
+    EXPECT_TRUE(aloc.MmapAlloc(PageToBytes(aloc.kBuddyHeapSize + 10), node, filename, linenum) != nullptr);
     EXPECT_EQ(3, aloc.ptr_to_bstchunk.size());
-    EXPECT_TRUE(aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 20), node, filename, linenum) != nullptr);
+    EXPECT_TRUE(aloc.MmapAlloc(PageToBytes(aloc.kBuddyHeapSize + 20), node, filename, linenum) != nullptr);
     EXPECT_EQ(4, aloc.ptr_to_bstchunk.size());
     for (const auto p : aloc.ptr_to_bstchunk) {
         if (p.second->next)
@@ -145,14 +195,16 @@ void AllocatorTest::BstAllocateTest() {
         if (p.second->prev)
             EXPECT_EQ(PageToBytes(p.second->prev->size), subtract(p.second->mem_ptr, p.second->prev->mem_ptr));
     }
+    EXPECT_EQ(aloc.AllocatedPages(), GetAllocatedBSTSize());
+    EXPECT_EQ(kBSTHeapSize - aloc.AllocatedPages(), GetFreeBSTSize());
 }
 
 void AllocatorTest::BstFreeTest() {
-    void* ptr1 = aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 10), node, filename, linenum);
+    void* ptr1 = aloc.MmapAlloc(PageToBytes(aloc.kBuddyHeapSize + 10), node, filename, linenum);
     EXPECT_TRUE(ptr1 != nullptr);
-    void* ptr2 = aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 20), node, filename, linenum);
+    void* ptr2 = aloc.MmapAlloc(PageToBytes(aloc.kBuddyHeapSize + 20), node, filename, linenum);
     EXPECT_TRUE(ptr2 != nullptr);
-    void* ptr3 = aloc.MmapAlloc(PageToBytes(aloc.kBuddyPageSize + 30), node, filename, linenum);
+    void* ptr3 = aloc.MmapAlloc(PageToBytes(aloc.kBuddyHeapSize + 30), node, filename, linenum);
     EXPECT_TRUE(ptr3 != nullptr);
     EXPECT_EQ(4, aloc.ptr_to_bstchunk.size());
     aloc.MmapFree(ptr2);
@@ -161,6 +213,8 @@ void AllocatorTest::BstFreeTest() {
     EXPECT_EQ(2, aloc.ptr_to_bstchunk.size());
     aloc.MmapFree(ptr1);
     EXPECT_EQ(1, aloc.ptr_to_bstchunk.size());
+    EXPECT_EQ(aloc.AllocatedPages(), GetAllocatedBSTSize());
+    EXPECT_EQ(kBSTHeapSize - aloc.AllocatedPages(), GetFreeBSTSize());
 }
 
 void AllocatorTest::HashSegTest() {
@@ -168,13 +222,13 @@ void AllocatorTest::HashSegTest() {
     EXPECT_TRUE(ptr1 != nullptr);
     EXPECT_EQ(1, aloc.occupied_hash_segs.size());
     EXPECT_EQ(0, aloc.reserved_hash_segs.size());
-    EXPECT_EQ(aloc.kHashSegPageSize, aloc.AllocatedPages());
     aloc.MmapFree(ptr1);
     EXPECT_EQ(0, aloc.occupied_hash_segs.size());
     EXPECT_EQ(1, aloc.reserved_hash_segs.size());
     EXPECT_EQ(0, aloc.AllocatedPages());
 }
 
+TEST_F(AllocatorTest, AllocateNonPositiveTest) { AllocateNonPositiveTest(); }
 TEST_F(AllocatorTest, GetBuddyOrderTest) { GetBuddyOrderTest(); }
 TEST_F(AllocatorTest, BuddyAllocateTest) { BuddyAllocateTest(); }
 TEST_F(AllocatorTest, BuddyFreeTest) { BuddyFreeTest(); }
