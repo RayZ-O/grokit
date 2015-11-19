@@ -36,12 +36,12 @@ class AllocatorTest : public ::testing::Test {
 protected:
     static constexpr int kBuddyHeapSize = 1 << MAX_ORDER;
     static constexpr int kBSTHeapSize = INIT_HEAP_PAGE_SIZE - (1 << MAX_ORDER);
-    BuddyMemoryAllocator aloc;
+    BuddyMemoryAllocator& aloc;
     int node;
     char* filename;
     int linenum;
 
-    AllocatorTest() : aloc() {
+    AllocatorTest() : aloc(BuddyMemoryAllocator::GetAllocator()) {
         node = 0;
         filename = nullptr;
         linenum = 0;
@@ -164,13 +164,17 @@ void AllocatorTest::AllocateZeroTest() {
 }
 
 void AllocatorTest::HashSegTest() {
-    void* ptr1 = aloc.MmapAlloc(PageToBytes(aloc.kHashSegPageSize), node, filename, linenum);
-    EXPECT_TRUE(ptr1 != nullptr);
+    void* ptr = aloc.MmapAlloc(PageToBytes(aloc.kHashSegPageSize), node, filename, linenum);
+    EXPECT_TRUE(ptr != nullptr);
     EXPECT_EQ(1, aloc.occupied_hash_segs.size());
     EXPECT_EQ(0, aloc.reserved_hash_segs.size());
-    aloc.MmapFree(ptr1);
+    aloc.MmapFree(ptr);
     EXPECT_EQ(0, aloc.occupied_hash_segs.size());
     EXPECT_EQ(1, aloc.reserved_hash_segs.size());
+    ptr = aloc.MmapAlloc(PageToBytes(aloc.kHashSegPageSize), node, filename, linenum);
+    EXPECT_TRUE(ptr != nullptr);
+    EXPECT_EQ(0, aloc.reserved_hash_segs.size());
+    aloc.MmapFree(ptr);
     EXPECT_EQ(0, aloc.AllocatedPages());
 }
 

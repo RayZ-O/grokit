@@ -27,6 +27,7 @@
 #include <gtest/gtest.h>
 
 #include "MmapAllocator.h"
+#include "BSTChunk.h"
 // Below 3 headers need for constant used for defining fixed hash size HASH_SEG_SIZE
 #include "HashTableMacros.h"
 #include "Constants.h"
@@ -116,35 +117,6 @@ class BuddyMemoryAllocator {
         }
 #endif
     };
-    // binary search tree chunk
-    struct BSTreeChunk {
-        void* mem_ptr;
-        int size;
-        bool used;
-        BSTreeChunk* prev; // pointer to previous physical chunk
-        BSTreeChunk* next; // pointer to next physical chunk
-
-        BSTreeChunk(void* ptr, int s, bool u) : mem_ptr(ptr), size(s), used(u), prev(nullptr), next(nullptr) { }
-
-        void set(void* ptr, int s, bool u, BSTreeChunk* p = nullptr, BSTreeChunk* n = nullptr) {
-            mem_ptr = ptr;
-            size = s;
-            used = u;
-            if (p) prev = p;
-            if (n) next = n;
-        }
-
-#ifdef GUNIT_TEST
-        friend std::ostream& operator <<(std::ostream &output, BSTreeChunk &chunk) {
-            output << "pointer:" << ((long)chunk.mem_ptr) / (512*1024) << std::endl;
-            output << "size:" << chunk.size << std::endl;
-            output << "used:" << (chunk.used ? "true" : "false") << std::endl;
-            output << "prev:" << (chunk.prev ? (long)chunk.prev->mem_ptr / (512*1024) : 0) << std::endl;
-            output << "next:" << (chunk.next ? (long)chunk.next->mem_ptr / (512*1024) : 0) << std::endl;
-            return output;
-        }
-#endif
-    };
 
     // buddy bin size look up table
     std::vector<int> buddy_bin_size_table;
@@ -168,14 +140,9 @@ class BuddyMemoryAllocator {
     BuddyChunk* GetBuddyChunk(void* ptr, int size, bool used, int order, int idx);
 
     int GetOrder(int page_size);
-    // get pointer that point to num_pages(convert to bytes) behind ptr
-    void* PtrSeek(void* ptr, int num_pages);
-    // erase pointer in the given size set in free tree
+
     void EraseTreePtr(int size, void* ptr);
 
-    int BytesToPageSize(size_t bytes);
-
-    size_t PageSizeToBytes(int page_size);
     // update number of allocated pages and free pages
     void UpdateStatus(int allocated_size);
 
