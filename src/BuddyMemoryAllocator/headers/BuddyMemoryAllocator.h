@@ -28,6 +28,8 @@
 
 #include "MmapAllocator.h"
 #include "BSTChunk.h"
+#include "BuddyChunk.h"
+#include "AllocatorUtil.h"
 // Below 3 headers need for constant used for defining fixed hash size HASH_SEG_SIZE
 #include "HashTableMacros.h"
 #include "Constants.h"
@@ -88,36 +90,6 @@ class BuddyMemoryAllocator {
     const size_t kHashSegAlignedSize;
     // Use buddy allocation when the request under threshold, otherwise use binary search tree
     const int kBuddyHeapSize;
-    // buddy system chunk
-    struct BuddyChunk {
-        void* mem_ptr;
-        int size;      // size of the chunk, may be larger than the request size(internal fragment)
-        bool used;
-        int order;     // TODO size is not necessary if order is stored
-        int page_index;  // offset from mem_ptr to buddy system base pointer in page size
-
-        BuddyChunk(void* ptr, int s, bool u, int o, int i) : mem_ptr(ptr), size(s), used(u), order(o), page_index(i) { }
-
-        void set(void* ptr, int s, bool u, int o, int i) {
-            mem_ptr = ptr;
-            size = s;
-            used = u;
-            order = o;
-            page_index = i;
-        }
-
-#ifdef GUNIT_TEST
-        friend std::ostream& operator <<(std::ostream &output, BuddyChunk &chunk) {
-            output << "pointer:" << ((long)chunk.mem_ptr) / (512*1024) << std::endl;
-            output << "size:" << chunk.size << std::endl;
-            output << "used:" << (chunk.used ? "true" : "false") << std::endl;
-            output << "order:" << chunk.order << std::endl;
-            output << "page index:" << chunk.page_index << std::endl;
-            return output;
-        }
-#endif
-    };
-
     // buddy bin size look up table
     std::vector<int> buddy_bin_size_table;
     // point to the beginning of buddy memory
@@ -129,20 +101,14 @@ class BuddyMemoryAllocator {
     std::vector<std::list<int>> free_area;
     // binary search tree of free list
     std::map<int, std::unordered_set<void*>> free_tree;
-
     // store chunk info in external data structure to avoid breaking DMA
     std::unordered_set<void*> occupied_hash_segs;
     std::unordered_map<void*, BuddyChunk*> ptr_to_budchunk;
     std::unordered_map<void*, BSTreeChunk*> ptr_to_bstchunk;
-    // object pool for buddy chunk to avoid frequently new and delete
-    std::vector<BuddyChunk*> budchunk_pool;
-    // get buddy chunk from chunk pool, if the pool is empty, allocate a new one
-    BuddyChunk* GetBuddyChunk(void* ptr, int size, bool used, int order, int idx);
 
     int GetOrder(int page_size);
-
+    // erase pointer in the given size set in free tree
     void EraseTreePtr(int size, void* ptr);
-
     // update number of allocated pages and free pages
     void UpdateStatus(int allocated_size);
 

@@ -13,7 +13,6 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
-
 #include <iostream>
 #include "BSTChunk.h"
 #include "AllocatorUtil.h"
@@ -35,11 +34,15 @@ BSTreeChunk* BSTreeChunk::GetChunk(void* ptr, int s, bool u, BSTreeChunk* p, BST
     if (bstchunk_pool.empty()) {
         chunk = new BSTreeChunk(ptr, s, u, p, n);
     } else {
-        BSTreeChunk* chunk = bstchunk_pool.back();
+        chunk = bstchunk_pool.back();
         bstchunk_pool.pop_back();
         chunk->Assign(ptr, s, u, p, n);
     }
     return chunk;
+}
+
+void BSTreeChunk::PutChunk(BSTreeChunk* chunk) {
+    bstchunk_pool.push_back(chunk);
 }
 
 void BSTreeChunk::Assign(void* ptr, int s, bool u, BSTreeChunk* p, BSTreeChunk* n) {
@@ -52,7 +55,7 @@ void BSTreeChunk::Assign(void* ptr, int s, bool u, BSTreeChunk* p, BSTreeChunk* 
 
 BSTreeChunk* BSTreeChunk::Split(int used_size) {
     void* remain = PtrSeek(mem_ptr, used_size);
-    BSTreeChunk* remain_chunk = GetChunk(remain,
+    BSTreeChunk* remain_chunk = GetChunk(remain,             // pointer to the beginning of remaining part
                                          size - used_size,   // size of the chunk
                                          false,              // is in used
                                          this,               // previous physical chunk
@@ -64,27 +67,32 @@ BSTreeChunk* BSTreeChunk::Split(int used_size) {
 }
 
 pair<BSTreeChunk*, bool> BSTreeChunk::CoalescePrev() {
+    // return false if no more coalesce can be perform
     if (!prev || prev->used) {
         return {nullptr, false};
     }
+    // pointing to the beginning of coalesced chunk
     mem_ptr = prev->mem_ptr;
     size += prev->size;
-    bstchunk_pool.push_back(prev);
+    PutChunk(prev);
     prev = prev->prev;
     if (prev && prev->used) {
+        // update next pointer of previous chunk
         prev->next = this;
     }
     return {bstchunk_pool.back(), true};
 }
 
 pair<BSTreeChunk*, bool> BSTreeChunk::CoalesceNext() {
+    // return false if no more coalesce can be perform
     if (!next || next->used) {
         return {nullptr, false};
     }
     size += next->size;
-    bstchunk_pool.push_back(next);
+    PutChunk(next);
     next = next->next;
     if (next && next->used) {
+        // update previous pointer of next chunk
         next->prev = this;
     }
     return {bstchunk_pool.back(), true};
