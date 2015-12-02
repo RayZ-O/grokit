@@ -122,6 +122,8 @@ class BuddyMemoryAllocator {
 
     void BuddyFree(void* ptr);
 
+    void UpdateFreeInfo(std::pair<BSTreeChunk*, bool> &&p);
+
     void BSTreeFree(void* ptr);
 
 public:

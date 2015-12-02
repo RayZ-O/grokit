@@ -198,7 +198,12 @@ void BuddyMemoryAllocator::EraseTreePtr(int size, void* ptr) {
 void* BuddyMemoryAllocator::BSTreeAlloc(int num_pages, int node) {
     auto it = free_tree.lower_bound(num_pages);
     if (it == free_tree.end()) {
-        return nullptr;
+        int grow_pages = max(HEAP_GROW_BY_SIZE, num_pages);
+        void* ptr = SYS_MMAP_ALLOC(PageSizeToBytes(grow_pages));
+        FATALIF(!SYS_MMAP_CHECK(ptr),
+                "Run out of memory in allocator. Request: %d MB", grow_pages / 2);
+        BSTreeChunk::GetChunk(ptr, grow_pages, false, nullptr, nullptr);
+        return BSTreeAlloc(num_pages, node);
     } else {
         int size = it->first;
         unordered_set<void*>& ptrs = it->second;
@@ -226,16 +231,16 @@ void BuddyMemoryAllocator::MmapChangeProt(void* ptr, int prot) {
         SYS_MMAP_PROT(ptr, kHashSegAlignedSize, prot);
     } else if (ptr_to_budchunk.find(ptr) != ptr_to_budchunk.end()) {
         WARNINGIF(-1 == SYS_MMAP_PROT(ptr, PageSizeToBytes(ptr_to_budchunk[ptr]->size), prot),
-                "Changing protection of page at address %p size %d failed with message %s",
-                ptr, ptr_to_budchunk[ptr]->size, strerror(errno));
+                  "Changing protection of page at address %p size %d failed with message %s",
+                  ptr, ptr_to_budchunk[ptr]->size, strerror(errno));
     } else {
         // find the size and insert the freed memory in the
         auto it = ptr_to_bstchunk.find(ptr);
         FATALIF(it == ptr_to_bstchunk.end(), "Changing the protection of unallocated pointer %p.", ptr);
          // change protection
         WARNINGIF(-1 == SYS_MMAP_PROT(ptr, PageSizeToBytes(it->second->size), prot),
-                "Changing protection of page at address %p size %d failed with message %s",
-                ptr, it->second->size, strerror(errno));
+                  "Changing protection of page at address %p size %d failed with message %s",
+                  ptr, it->second->size, strerror(errno));
     }
 }
 
@@ -285,25 +290,22 @@ void BuddyMemoryAllocator::BuddyFree(void* ptr) {
     ptr_to_budchunk.emplace(beg_ptr, cur_chunk);
 }
 
+void BuddyMemoryAllocator::UpdateFreeInfo(pair<BSTreeChunk*, bool> &&p) {
+    if (p.second) {
+        EraseTreePtr(p.first->size, p.first->mem_ptr);
+        ptr_to_bstchunk.erase(p.first->mem_ptr);
+    }
+}
+
 void BuddyMemoryAllocator::BSTreeFree(void* ptr) {
     BSTreeChunk* cur_chunk = ptr_to_bstchunk[ptr];
     ptr_to_bstchunk.erase(ptr);
     cur_chunk->used = false;
     UpdateStatus(-cur_chunk->size);
-    // iterative coalesce with next chunk if it is free
-    pair<BSTreeChunk*, bool> p = cur_chunk->CoalesceNext();
-    while (p.second) {
-        EraseTreePtr(p.first->size, p.first->mem_ptr);
-        ptr_to_bstchunk.erase(p.first->mem_ptr);
-        p = cur_chunk->CoalesceNext();
-    }
-    // iterative coalesce with previous chunk if it is free
-    p = cur_chunk->CoalescePrev();
-    while (p.second) {
-        EraseTreePtr(p.first->size, p.first->mem_ptr);
-        ptr_to_bstchunk.erase(p.first->mem_ptr);
-        p = cur_chunk->CoalescePrev();
-    }
+    // coalesce with next chunk if it is free
+    UpdateFreeInfo(cur_chunk->CoalesceNext());
+    // coalesce with previous chunk if it is free
+    UpdateFreeInfo(cur_chunk->CoalescePrev());
     free_tree[cur_chunk->size].insert(cur_chunk->mem_ptr);
     ptr_to_bstchunk[cur_chunk->mem_ptr] = cur_chunk;
 }

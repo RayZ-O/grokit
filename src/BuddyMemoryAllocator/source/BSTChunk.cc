@@ -53,7 +53,9 @@ void BSTreeChunk::Assign(void* ptr, int s, bool u, BSTreeChunk* p, BSTreeChunk* 
     next = n;
 }
 
+// splits this chunk and return the remaining chunk
 BSTreeChunk* BSTreeChunk::Split(int used_size) {
+    assert(used_size <= size);
     void* remain = PtrSeek(mem_ptr, used_size);
     BSTreeChunk* remain_chunk = GetChunk(remain,             // pointer to the beginning of remaining part
                                          size - used_size,   // size of the chunk
@@ -76,7 +78,7 @@ pair<BSTreeChunk*, bool> BSTreeChunk::CoalescePrev() {
     size += prev->size;
     PutChunk(prev);
     prev = prev->prev;
-    if (prev && prev->used) {
+    if (prev) {
         // update next pointer of previous chunk
         prev->next = this;
     }
@@ -91,7 +93,7 @@ pair<BSTreeChunk*, bool> BSTreeChunk::CoalesceNext() {
     size += next->size;
     PutChunk(next);
     next = next->next;
-    if (next && next->used) {
+    if (next) {
         // update previous pointer of next chunk
         next->prev = this;
     }
