@@ -164,21 +164,21 @@ int AllocatorTest::GetFreeBSTSize() {
 }
 
 void AllocatorTest::AllocateZeroTest() {
-    EXPECT_TRUE(mmap_alloc_imp(0_page, node, filename, linenum) == nullptr);
+    EXPECT_TRUE(mmap_alloc(0_page, node) == nullptr);
 }
 
 void AllocatorTest::HashSegTest() {
-    void* ptr = mmap_alloc_imp(PageSizeToBytes(aloc.kHashSegPageSize), node, filename, linenum);
+    void* ptr = mmap_alloc(PageSizeToBytes(aloc.kHashSegPageSize), node);
     EXPECT_TRUE(ptr != nullptr);
     EXPECT_EQ(1, aloc.occupied_hash_segs.size());
     EXPECT_EQ(0, aloc.reserved_hash_segs.size());
-    mmap_free_imp(ptr);
+    mmap_free(ptr);
     EXPECT_EQ(0, aloc.occupied_hash_segs.size());
     EXPECT_EQ(1, aloc.reserved_hash_segs.size());
-    ptr = mmap_alloc_imp(PageSizeToBytes(aloc.kHashSegPageSize), node, filename, linenum);
+    ptr = mmap_alloc(PageSizeToBytes(aloc.kHashSegPageSize), node);
     EXPECT_TRUE(ptr != nullptr);
     EXPECT_EQ(0, aloc.reserved_hash_segs.size());
-    mmap_free_imp(ptr);
+    mmap_free(ptr);
 }
 
 void AllocatorTest::GetBuddyOrderTest() {
@@ -195,50 +195,50 @@ void AllocatorTest::GetBuddyOrderTest() {
 
 void AllocatorTest::BuddySplitTest() {
     vector<void*> ptrs;
-    ptrs.push_back(mmap_alloc_imp(1_page, node, filename, linenum));
+    ptrs.push_back(mmap_alloc(1_page, node));
     // after allocating 1 page, each free list should have 1 element
     for (int i = 0; i < MAX_ORDER; i++) {
         EXPECT_EQ(1, aloc.free_area[i].size());
     }
-    ptrs.push_back(mmap_alloc_imp(4_page, node, filename, linenum));
+    ptrs.push_back(mmap_alloc(4_page, node));
     EXPECT_EQ(0, aloc.free_area[2].size());
     // allocate 4 pages(order 2) twice, 8 pages(order 3) block will be splitted
-    ptrs.push_back(mmap_alloc_imp(4_page, node, filename, linenum));
+    ptrs.push_back(mmap_alloc(4_page, node));
     EXPECT_EQ(1, aloc.free_area[2].size());
     EXPECT_EQ(0, aloc.free_area[3].size());
-    ptrs.push_back(mmap_alloc_imp(8_page, node, filename, linenum));
+    ptrs.push_back(mmap_alloc(8_page, node));
     EXPECT_EQ(1, aloc.free_area[3].size());
     EXPECT_EQ(0, aloc.free_area[4].size());
     EXPECT_EQ(aloc.AllocatedPages(), GetAllocatedBuddySize());
     for (auto p : ptrs) {
-        mmap_free_imp(p);
+        mmap_free(p);
     }
     EXPECT_EQ(0, GetAllocatedBuddySize());
     EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
 }
 
 void AllocatorTest::BuddyCoalesceTest() {
-    void* ptr_2p = mmap_alloc_imp(2_page, node, filename, linenum);
+    void* ptr_2p = mmap_alloc(2_page, node);
     for (int i = 1; i < MAX_ORDER; i++) {
         EXPECT_EQ(1, aloc.free_area[i].size());
     }
-    mmap_free_imp(ptr_2p);
+    mmap_free(ptr_2p);
     // after free all free block coalesce to largest block
     EXPECT_EQ(1, aloc.free_area[MAX_ORDER].size());
-    void* ptr_8p = mmap_alloc_imp(8_page, node, filename, linenum);
+    void* ptr_8p = mmap_alloc(8_page, node);
     // allocate 4 pages to split buddy block
-    void* ptr_4p = mmap_alloc_imp(4_page, node, filename, linenum);
-    mmap_free_imp(ptr_8p);
+    void* ptr_4p = mmap_alloc(4_page, node);
+    mmap_free(ptr_8p);
     // size of buddy is 4, no coalesce
     EXPECT_EQ(1, aloc.free_area[3].size());
-    mmap_free_imp(ptr_4p);
+    mmap_free(ptr_4p);
     EXPECT_EQ(1, aloc.free_area[MAX_ORDER].size());
-    ptr_8p = mmap_alloc_imp(8_page, node, filename, linenum);
-    void* ptr_8p2 = mmap_alloc_imp(8_page, node, filename, linenum);
-    mmap_free_imp(ptr_8p);
+    ptr_8p = mmap_alloc(8_page, node);
+    void* ptr_8p2 = mmap_alloc(8_page, node);
+    mmap_free(ptr_8p);
     // buddy in use, no coalesce
     EXPECT_EQ(1, aloc.free_area[3].size());
-    mmap_free_imp(ptr_8p2);
+    mmap_free(ptr_8p2);
     EXPECT_EQ(1, aloc.free_area[MAX_ORDER].size());
 }
 
@@ -248,7 +248,7 @@ void AllocatorTest::BuddyFixedSizeTest() {
     // for (int size = 64, order = 6; size < kBuddyHeapSize; size <<= 1, order++) {
         vector<void*> ptrs;
         for (int i = 1; i < kBuddyHeapSize / size; i++) {
-            ptrs.push_back(mmap_alloc_imp(PageSizeToBytes(size), node, filename, linenum));
+            ptrs.push_back(mmap_alloc(PageSizeToBytes(size), node));
             EXPECT_TRUE(ptrs.back() != nullptr);
             EXPECT_EQ(i * size, aloc.AllocatedPages());
             EXPECT_EQ(aloc.AllocatedPages(), GetAllocatedBuddySize());
@@ -256,7 +256,7 @@ void AllocatorTest::BuddyFixedSizeTest() {
         }
         EXPECT_EQ(size , GetFreeBuddySize());
         for (auto p : ptrs) {
-            mmap_free_imp(p);
+            mmap_free(p);
         }
         EXPECT_EQ(0, GetAllocatedBuddySize());
         EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
@@ -266,10 +266,10 @@ void AllocatorTest::BuddyFixedSizeTest() {
 
 void AllocatorTest::BuddySmallToLargeTest() {
     vector<void*> ptrs;
-    ptrs.push_back(mmap_alloc_imp(1_page, node, filename, linenum));
+    ptrs.push_back(mmap_alloc(1_page, node));
     int num_ptrs = aloc.ptr_to_budchunk.size();
     for (int size = 2, i = 1; size < kBuddyHeapSize; size <<= 1, i++) {
-        ptrs.push_back(mmap_alloc_imp(PageSizeToBytes(size), node, filename, linenum));
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(size), node));
         EXPECT_TRUE(ptrs.back() != nullptr);
         EXPECT_EQ(0, aloc.free_area[i].size());
         EXPECT_EQ(num_ptrs, aloc.ptr_to_budchunk.size());
@@ -277,7 +277,7 @@ void AllocatorTest::BuddySmallToLargeTest() {
     EXPECT_EQ(kBuddyHeapSize - 1, GetAllocatedBuddySize());
     EXPECT_EQ(1, GetFreeBuddySize());
     for (auto p : ptrs) {
-        mmap_free_imp(p);
+        mmap_free(p);
     }
     EXPECT_EQ(0, GetAllocatedBuddySize());
     EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
@@ -287,7 +287,7 @@ void AllocatorTest::BuddyLargeToSmallTest() {
     vector<void*> ptrs;
     int num_ptrs = 1;
     for (int size = kBuddyHeapSize >> 1, i = MAX_ORDER - 1; size >= 2; size >>= 1, i--) {
-        ptrs.push_back(mmap_alloc_imp(PageSizeToBytes(size), node, filename, linenum));
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(size), node));
         EXPECT_TRUE(ptrs.back() != nullptr);
         EXPECT_EQ(1, aloc.free_area[i].size());
         EXPECT_EQ(++num_ptrs, aloc.ptr_to_budchunk.size());
@@ -295,7 +295,7 @@ void AllocatorTest::BuddyLargeToSmallTest() {
     EXPECT_EQ(kBuddyHeapSize - 2, GetAllocatedBuddySize());
     EXPECT_EQ(2, GetFreeBuddySize());
     for (auto p : ptrs) {
-        mmap_free_imp(p);
+        mmap_free(p);
     }
     EXPECT_EQ(0, GetAllocatedBuddySize());
     EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
@@ -306,7 +306,7 @@ void AllocatorTest::BuddyIncreasingFillTest() {
     int tot_size = 0;
     // allocate increasing sequence
     for (int p_size : {1, 1, 2, 3, 5, 8, 13, 21}) {
-        ptrs.push_back(mmap_alloc_imp(PageSizeToBytes(p_size), node, filename, linenum));
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), node));
         EXPECT_TRUE(ptrs.back() != nullptr);
         tot_size += 1 << aloc.GetOrder(p_size);
         EXPECT_EQ(tot_size, GetAllocatedBuddySize());
@@ -316,7 +316,7 @@ void AllocatorTest::BuddyIncreasingFillTest() {
         EXPECT_EQ(1, aloc.free_area[i + 3].size());
     }
     for (auto p : ptrs) {
-        mmap_free_imp(p);
+        mmap_free(p);
     }
     EXPECT_EQ(0, GetAllocatedBuddySize());
     EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
@@ -327,7 +327,7 @@ void AllocatorTest::BuddyDecreasingFillTest() {
     int tot_size = 0;
     // allocate decreasing sequence
     for (int p_size : {25, 16, 9, 4, 1}) {
-        ptrs.push_back(mmap_alloc_imp(PageSizeToBytes(p_size), node, filename, linenum));
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), node));
         EXPECT_TRUE(ptrs.back() != nullptr);
         tot_size += 1 << aloc.GetOrder(p_size);
         EXPECT_EQ(tot_size, GetAllocatedBuddySize());
@@ -340,7 +340,7 @@ void AllocatorTest::BuddyDecreasingFillTest() {
     EXPECT_EQ(0, aloc.free_area[2].size());
     EXPECT_EQ(0, aloc.free_area[6].size());
     for (auto p : ptrs) {
-        mmap_free_imp(p);
+        mmap_free(p);
     }
     EXPECT_EQ(0, GetAllocatedBuddySize());
     EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
@@ -350,7 +350,7 @@ void AllocatorTest::BuddyVariousFillTest() {
     vector<void*> ptrs;
     int tot_size = 0;
     for (int p_size : {7, 3, 2, 5, 14, 50, 15, 3}) {
-        ptrs.push_back(mmap_alloc_imp(PageSizeToBytes(p_size), node, filename, linenum));
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), node));
         EXPECT_TRUE(ptrs.back() != nullptr);
         tot_size += 1 << aloc.GetOrder(p_size);
         EXPECT_EQ(tot_size, GetAllocatedBuddySize());
@@ -363,7 +363,7 @@ void AllocatorTest::BuddyVariousFillTest() {
     EXPECT_EQ(0, aloc.free_area[5].size());
     EXPECT_EQ(0, aloc.free_area[6].size());
     for (auto p : ptrs) {
-        mmap_free_imp(p);
+        mmap_free(p);
     }
     EXPECT_EQ(0, GetAllocatedBuddySize());
     EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
@@ -374,21 +374,21 @@ void AllocatorTest::BuddyFreeHalfRefillTest() {
     vector<int> sizes{7, 3, 2, 5, 14, 50, 15, 3};
     int tot_size = 0;
     for (int p_size : sizes) {
-        ptrs.push_back(mmap_alloc_imp(PageSizeToBytes(p_size), node, filename, linenum));
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), node));
         EXPECT_TRUE(ptrs.back() != nullptr);
         tot_size += 1 << aloc.GetOrder(p_size);
     }
     // free half of allocated blocks
     for (int i = 0; i < ptrs.size(); i++) {
         if (i % 2) {
-            mmap_free_imp(ptrs[i]);
+            mmap_free(ptrs[i]);
             ptrs[i] = nullptr;
             tot_size -= 1 << aloc.GetOrder(sizes[i]);
             EXPECT_EQ(tot_size, GetAllocatedBuddySize());
         }
     }
     for (int p_size : {2, 31, 4, 7}) {
-        ptrs.push_back(mmap_alloc_imp(PageSizeToBytes(p_size), node, filename, linenum));
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), node));
         EXPECT_TRUE(ptrs.back() != nullptr);
         tot_size += 1 << aloc.GetOrder(p_size);
         EXPECT_EQ(tot_size, GetAllocatedBuddySize());
@@ -401,7 +401,7 @@ void AllocatorTest::BuddyFreeHalfRefillTest() {
     EXPECT_EQ(1, aloc.free_area[5].size());
     EXPECT_EQ(0, aloc.free_area[6].size());
     for (auto p : ptrs) {
-        if (p) mmap_free_imp(p);
+        if (p) mmap_free(p);
     }
     EXPECT_EQ(0, GetAllocatedBuddySize());
     EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
@@ -410,7 +410,7 @@ void AllocatorTest::BuddyFreeHalfRefillTest() {
 void AllocatorTest::BstAllocateTest() {
     vector<void*> ptrs;
     for (int i = 1; i <= 3; i++) {
-        ptrs.push_back(mmap_alloc_imp(PageSizeToBytes(kBuddyHeapSize + i * 10), node, filename, linenum));
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(kBuddyHeapSize + i * 10), node));
         EXPECT_TRUE(ptrs.back() != nullptr);
         EXPECT_EQ(i + 1, aloc.ptr_to_bstchunk.size());
     }
@@ -425,7 +425,7 @@ void AllocatorTest::BstAllocateTest() {
             EXPECT_EQ(PageSizeToBytes(p.second->prev->size), subtract(p.second->mem_ptr, p.second->prev->mem_ptr));
     }
     for (auto p : ptrs) {
-        mmap_free_imp(p);
+        mmap_free(p);
     }
     EXPECT_EQ(1, aloc.free_tree.size());
     EXPECT_EQ(1, aloc.ptr_to_bstchunk.size());
@@ -436,15 +436,15 @@ void AllocatorTest::BstAllocateTest() {
 void AllocatorTest::BstFreeTest() {
     vector<void*> ptrs;
     for (int i = 1; i <= 3; i++) {
-        ptrs.push_back(mmap_alloc_imp(PageSizeToBytes(kBuddyHeapSize + i * 10), node, filename, linenum));
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(kBuddyHeapSize + i * 10), node));
         EXPECT_TRUE(ptrs.back() != nullptr);
         EXPECT_EQ(i + 1, aloc.ptr_to_bstchunk.size());
     }
-    mmap_free_imp(ptrs[1]);
+    mmap_free(ptrs[1]);
     EXPECT_EQ(4, aloc.ptr_to_bstchunk.size());
-    mmap_free_imp(ptrs[2]);
+    mmap_free(ptrs[2]);
     EXPECT_EQ(2, aloc.ptr_to_bstchunk.size());
-    mmap_free_imp(ptrs[0]);
+    mmap_free(ptrs[0]);
     EXPECT_EQ(1, aloc.ptr_to_bstchunk.size());
     EXPECT_EQ(0, GetAllocatedBSTSize());
     EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize());
@@ -452,15 +452,15 @@ void AllocatorTest::BstFreeTest() {
 
 void AllocatorTest::HybridAllocateTest() {
     vector<void*> ptrs;
-    ptrs.push_back(mmap_alloc_imp(PageSizeToBytes(kBuddyHeapSize - 1), node, filename, linenum));
-    ptrs.push_back(mmap_alloc_imp(2_page, node, filename, linenum));
+    ptrs.push_back(mmap_alloc(PageSizeToBytes(kBuddyHeapSize - 1), node));
+    ptrs.push_back(mmap_alloc(2_page, node));
     EXPECT_EQ(2, aloc.ptr_to_bstchunk.size());
     EXPECT_EQ(aloc.AllocatedPages(), GetAllocatedBuddySize() + GetAllocatedBSTSize());
-    mmap_free_imp(ptrs[0]);
-    ptrs[0] = mmap_alloc_imp(2_page, node, filename, linenum);
+    mmap_free(ptrs[0]);
+    ptrs[0] = mmap_alloc(2_page, node);
     EXPECT_EQ(2, aloc.ptr_to_bstchunk.size());
     for (auto p : ptrs) {
-        mmap_free_imp(p);
+        mmap_free(p);
     }
     EXPECT_EQ(0, GetAllocatedBSTSize());
     EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize());
