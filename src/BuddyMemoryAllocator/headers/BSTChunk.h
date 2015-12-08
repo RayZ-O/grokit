@@ -29,7 +29,7 @@ public:
     BSTreeChunk* prev; // pointer to previous physical chunk
     BSTreeChunk* next; // pointer to next physical chunk
 
-    BSTreeChunk(void* ptr, int s, int node, bool u, BSTreeChunk* p, BSTreeChunk* n);
+    BSTreeChunk(void* ptr, int s, int nd, bool u, BSTreeChunk* p, BSTreeChunk* n);
     // deletes cpoy constructor
     BSTreeChunk(const BSTreeChunk& other) = delete;
     // deletes copy assignment operator

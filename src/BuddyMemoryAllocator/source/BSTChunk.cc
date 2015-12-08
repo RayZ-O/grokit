@@ -73,6 +73,9 @@ BSTreeChunk* BSTreeChunk::Split(int used_size) {
                                          next);              // next physical chunk
     size = used_size;
     used = true;
+    if (next) {
+        next->prev = remain_chunk;
+    }
     next = remain_chunk;
     return remain_chunk;
 }
@@ -114,6 +117,7 @@ BSTreeChunk* BSTreeChunk::CoalesceNext() {
 ostream& operator <<(ostream &output, BSTreeChunk &chunk) {
     output << "pointer:" << ((long)chunk.mem_ptr) / (512*1024) << endl;
     output << "size:" << chunk.size << endl;
+    output << "node:" << chunk.node << endl;
     output << "used:" << (chunk.used ? "true" : "false") << endl;
     output << "prev:" << (chunk.prev ? (long)chunk.prev->mem_ptr / (512*1024) : 0) << endl;
     output << "next:" << (chunk.next ? (long)chunk.next->mem_ptr / (512*1024) : 0) << endl;

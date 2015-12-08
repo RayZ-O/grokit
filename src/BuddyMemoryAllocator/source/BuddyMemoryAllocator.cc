@@ -57,7 +57,6 @@ off_t mmap_used(void) {
     return PAGES_TO_BYTES(aloc.AllocatedPages());
 }
 
-
 BuddyMemoryAllocator::BuddyMemoryAllocator(void)
     : is_initialized_(false),  // google code stype constructor initializer lists
       allocated_pages_(0),
@@ -78,10 +77,15 @@ BuddyMemoryAllocator::~BuddyMemoryAllocator(void) {
 
 void BuddyMemoryAllocator::HeapInit() {
     is_initialized_ = true;
+#ifdef GUNIT_TEST
+    int num_numa_nodes = 7;
+#else
     // if not define USE_NUMA, numaNodeCount() return 1
     int num_numa_nodes = numaNodeCount();
+#endif
+
     unsigned long node_mask = 0;
-    for (unsigned long long node = 0; node < num_numa_nodes; node++)
+    for (unsigned long long node = 0; node <= num_numa_nodes; node++)
     {
         node_mask = 0;
         node_mask |= (1 << node);
@@ -91,8 +95,9 @@ void BuddyMemoryAllocator::HeapInit() {
             perror("BuddyMemoryAllocator");
             FATAL("The memory allocator could not allocate memory");
         }
-#ifdef USE_NUMA
-#ifdef MMAP_TOUCH_PAGES
+#ifndef GUNIT_TEST
+    #ifdef USE_NUMA
+        #ifdef MMAP_TOUCH_PAGES
         // now bind it to the node and touch all the pages to make sure memory is bind to the node
         int retVal = mbind(new_chunk,                               // address
                            PageSizeToBytes(INIT_HEAP_PAGE_SIZE),    // length
@@ -105,7 +110,8 @@ void BuddyMemoryAllocator::HeapInit() {
         for (unsigned int k = 0; k < PageSizeToBytes(INIT_HEAP_PAGE_SIZE)/4; k += (1 << (ALLOC_PAGE_SIZE_EXPONENT-2))) {
             pInt[k] = 0;
         }
-#endif
+        #endif
+    #endif
 #endif
         free_pages_ += INIT_HEAP_PAGE_SIZE;
         numa_num_to_node[node]->free_tree[INIT_HEAP_PAGE_SIZE].insert(new_chunk);
@@ -131,7 +137,7 @@ void* BuddyMemoryAllocator::MmapAlloc(size_t num_bytes, int node, const char* f,
     void* res_ptr = BSTreeAlloc(num_pages, node);
 #ifdef USE_NUMA
     if (!res_ptr) {
-        // lookup other numa nodes
+        // if there is no fit chunk in current node, lookup other numa nodes
         for (int i = 0; i < numa_num_to_node.size(); i++) {
             if (i != node) {
                 res_ptr = BSTreeAlloc(num_pages, i);
@@ -147,6 +153,7 @@ void* BuddyMemoryAllocator::MmapAlloc(size_t num_bytes, int node, const char* f,
     }
     return res_ptr;
 }
+
 
 void BuddyMemoryAllocator::MmapChangeProt(void* ptr, int prot) {
     if (!ptr) {
