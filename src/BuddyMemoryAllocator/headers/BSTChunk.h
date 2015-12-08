@@ -24,27 +24,30 @@ class BSTreeChunk {
 public:
     void* mem_ptr;
     int size;
+    int node;  // numa node number
     bool used;
     BSTreeChunk* prev; // pointer to previous physical chunk
     BSTreeChunk* next; // pointer to next physical chunk
 
-    BSTreeChunk(void* ptr, int s, bool u, BSTreeChunk* p, BSTreeChunk* n);
+    BSTreeChunk(void* ptr, int s, int node, bool u, BSTreeChunk* p, BSTreeChunk* n);
     // deletes cpoy constructor
     BSTreeChunk(const BSTreeChunk& other) = delete;
     // deletes copy assignment operator
     BSTreeChunk& operator = (const BSTreeChunk& other) = delete;
     // assigns values to the chunk
-    void Assign(void* ptr, int s, bool u, BSTreeChunk* p, BSTreeChunk* n);
+    void Assign(void* ptr, int s, int nd, bool u, BSTreeChunk* p, BSTreeChunk* n);
     // splits current chunk into two chunks of new_size and size - new_size
     BSTreeChunk* Split(int new_size);
     // coalesces with the previous chunk
-    std::pair<BSTreeChunk*, bool> CoalescePrev();
+    BSTreeChunk* CoalescePrev();
     // coalesces with the next chunk
-    std::pair<BSTreeChunk*, bool> CoalesceNext();
+    BSTreeChunk* CoalesceNext();
     // gets chunk from chunk pool
-    static BSTreeChunk* GetChunk(void* ptr, int s, bool u, BSTreeChunk* p, BSTreeChunk* n);
+    static BSTreeChunk* GetChunk(void* ptr, int s, int node, bool u, BSTreeChunk* p, BSTreeChunk* n);
     // puts tree chunk back to chunk pool
     static void PutChunk(BSTreeChunk* chunk);
+    // free all cached free chunks
+    static void FreeChunks();
 
 #ifdef GUNIT_TEST
     // override ostream operator for pretty print

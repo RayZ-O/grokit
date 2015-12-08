@@ -19,9 +19,10 @@
 
 using namespace std;
 
-BSTreeChunk::BSTreeChunk(void* ptr, int s, bool u, BSTreeChunk* p, BSTreeChunk* n)
+BSTreeChunk::BSTreeChunk(void* ptr, int s, int nd, bool u, BSTreeChunk* p, BSTreeChunk* n)
     : mem_ptr(ptr),
       size(s),
+      node(nd),
       used(u),
       prev(p),
       next(n)
@@ -29,14 +30,14 @@ BSTreeChunk::BSTreeChunk(void* ptr, int s, bool u, BSTreeChunk* p, BSTreeChunk* 
 
 vector<BSTreeChunk*> BSTreeChunk::bstchunk_pool = vector<BSTreeChunk*>();
 
-BSTreeChunk* BSTreeChunk::GetChunk(void* ptr, int s, bool u, BSTreeChunk* p, BSTreeChunk* n) {
+BSTreeChunk* BSTreeChunk::GetChunk(void* ptr, int s, int nd, bool u, BSTreeChunk* p, BSTreeChunk* n) {
     BSTreeChunk* chunk = nullptr;
     if (bstchunk_pool.empty()) {
-        chunk = new BSTreeChunk(ptr, s, u, p, n);
+        chunk = new BSTreeChunk(ptr, s, nd, u, p, n);
     } else {
         chunk = bstchunk_pool.back();
         bstchunk_pool.pop_back();
-        chunk->Assign(ptr, s, u, p, n);
+        chunk->Assign(ptr, s, nd, u, p, n);
     }
     return chunk;
 }
@@ -45,9 +46,16 @@ void BSTreeChunk::PutChunk(BSTreeChunk* chunk) {
     bstchunk_pool.push_back(chunk);
 }
 
-void BSTreeChunk::Assign(void* ptr, int s, bool u, BSTreeChunk* p, BSTreeChunk* n) {
+void BSTreeChunk::FreeChunks() {
+    for (auto c : bstchunk_pool) {
+        delete c;
+    }
+}
+
+void BSTreeChunk::Assign(void* ptr, int s, int nd, bool u, BSTreeChunk* p, BSTreeChunk* n) {
     mem_ptr = ptr;
     size = s;
+    node = nd;
     used = u;
     prev = p;
     next = n;
@@ -59,6 +67,7 @@ BSTreeChunk* BSTreeChunk::Split(int used_size) {
     void* remain = PtrSeek(mem_ptr, used_size);
     BSTreeChunk* remain_chunk = GetChunk(remain,             // pointer to the beginning of remaining part
                                          size - used_size,   // size of the chunk
+                                         node,               // numa node number
                                          false,              // is in used
                                          this,               // previous physical chunk
                                          next);              // next physical chunk
@@ -68,10 +77,10 @@ BSTreeChunk* BSTreeChunk::Split(int used_size) {
     return remain_chunk;
 }
 
-pair<BSTreeChunk*, bool> BSTreeChunk::CoalescePrev() {
+BSTreeChunk* BSTreeChunk::CoalescePrev() {
     // return false if no more coalesce can be perform
     if (!prev || prev->used) {
-        return {nullptr, false};
+        return nullptr;
     }
     // pointing to the beginning of coalesced chunk
     mem_ptr = prev->mem_ptr;
@@ -82,13 +91,13 @@ pair<BSTreeChunk*, bool> BSTreeChunk::CoalescePrev() {
         // update next pointer of previous chunk
         prev->next = this;
     }
-    return {bstchunk_pool.back(), true};
+    return bstchunk_pool.back();
 }
 
-pair<BSTreeChunk*, bool> BSTreeChunk::CoalesceNext() {
+BSTreeChunk* BSTreeChunk::CoalesceNext() {
     // return false if no more coalesce can be perform
     if (!next || next->used) {
-        return {nullptr, false};
+        return nullptr;
     }
     size += next->size;
     PutChunk(next);
@@ -97,7 +106,7 @@ pair<BSTreeChunk*, bool> BSTreeChunk::CoalesceNext() {
         // update previous pointer of next chunk
         next->prev = this;
     }
-    return {bstchunk_pool.back(), true};
+    return bstchunk_pool.back();
 }
 
 #ifdef GUNIT_TEST
