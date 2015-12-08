@@ -57,6 +57,9 @@ off_t mmap_used(void){
 	return PAGES_TO_BYTES(aloc.AllocatedPages());
 }
 
+void mmap_diagnose() {
+
+}
 
 NumaMemoryAllocator::NumaMemoryAllocator(void)
     : is_initialized_(false),  // google code stype constructor initializer lists
