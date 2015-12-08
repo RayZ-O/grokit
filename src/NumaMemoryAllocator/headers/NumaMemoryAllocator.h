@@ -17,10 +17,10 @@
 #define _NUMA_MMAP_ALLOC_H_
 
 #include <map>
-#include <set>
-#include <list>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
-#include <pthread.h>
+#include <mutex>
 
 #include "MmapAllocator.h"
 // Below 3 headers need for constant used for defining fixed hash size HASH_SEG_SIZE
