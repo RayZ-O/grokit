@@ -45,7 +45,7 @@ int numaCurrentNode(void);
 #include <numaif.h>
 #include <numa.h>
 
-inline int numaNodeCount(void){ return numa_max_node() ; }
+inline int numaNodeCount(void){ return numa_max_node() + 1; }
 inline int int numaCurrentNode(void){ return numa_preferred(); }
 
 #else // no NUMA

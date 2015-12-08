@@ -1,5 +1,6 @@
 //
-//  Copyright 2015 Rui Zhang, 2012 Alin Dobra and Christopher Jermaine
+//  Copyright 2012 Alin Dobra and Christopher Jermaine,
+//            2015 Rui Zhang
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -21,8 +22,6 @@
 #include <unordered_set>
 #include <vector>
 #include <mutex>
-
-#include <gtest/gtest.h>
 
 #include "MmapAllocator.h"
 #include "BSTChunk.h"
@@ -63,6 +62,9 @@
 // Grow heap during run by this size if needed
 #define HEAP_GROW_BY_SIZE 256*16
 
+#ifdef GUNIT_TEST
+#include <gtest/gtest.h>
+#endif
 
 class BuddyMemoryAllocator {
 

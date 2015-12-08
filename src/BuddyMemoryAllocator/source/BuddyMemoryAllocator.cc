@@ -1,5 +1,6 @@
 //
-//  Copyright 2015 Rui Zhang, 2012 Alin Dobra and Christopher Jermaine
+//  Copyright 2012 Alin Dobra and Christopher Jermaine,
+//            2015 Rui Zhang
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -66,26 +67,25 @@ BuddyMemoryAllocator::BuddyMemoryAllocator(void)
     {}
 
 BuddyMemoryAllocator::~BuddyMemoryAllocator(void) {
-    for (auto p : ptr_to_bstchunk) {
-        SYS_MMAP_FREE(p.first, PageSizeToBytes(p.second->size));
-    }
-    for (auto s: reserved_hash_segs) {
-        SYS_MMAP_FREE(s, kHashSegAlignedSize);
-    }
-    BSTreeChunk::FreeChunks();
+    // for (auto p : ptr_to_bstchunk) {
+    //     SYS_MMAP_FREE(p.first, PageSizeToBytes(p.second->size));
+    // }
+    // for (auto s: reserved_hash_segs) {
+    //     SYS_MMAP_FREE(s, kHashSegAlignedSize);
+    // }
+    // BSTreeChunk::FreeChunks();
 }
 
 void BuddyMemoryAllocator::HeapInit() {
     is_initialized_ = true;
-#ifdef GUNIT_TEST
-    int num_numa_nodes = 7;
+#ifdef TEST_NUMA_LOGIC
+    // set number of numa nodes to 8 to test numa allocation logic
+    int num_numa_nodes = 8;
 #else
-    // if not define USE_NUMA, numaNodeCount() return 1
     int num_numa_nodes = numaNodeCount();
 #endif
-
     unsigned long node_mask = 0;
-    for (unsigned long long node = 0; node <= num_numa_nodes; node++)
+    for (unsigned long long node = 0; node < num_numa_nodes; node++)
     {
         node_mask = 0;
         node_mask |= (1 << node);
@@ -95,23 +95,19 @@ void BuddyMemoryAllocator::HeapInit() {
             perror("BuddyMemoryAllocator");
             FATAL("The memory allocator could not allocate memory");
         }
-#ifndef GUNIT_TEST
-    #ifdef USE_NUMA
-        #ifdef MMAP_TOUCH_PAGES
+#if defined(USE_NUMA) && defined(MMAP_TOUCH_PAGES)
         // now bind it to the node and touch all the pages to make sure memory is bind to the node
         int retVal = mbind(new_chunk,                               // address
                            PageSizeToBytes(INIT_HEAP_PAGE_SIZE),    // length
                            MPOL_PREFERRED,                          // policy mode
                            &node_mask,                              // node mask
-                           num_numa_nodes+1,                        // max number of nodes
+                           num_numa_nodes,                          // max number of nodes
                            MPOL_MF_MOVE);                           // policy mode flag
         ASSERT(retVal == 0);
         int* pInt = reinterpret_cast<int*>(new_chunk);
         for (unsigned int k = 0; k < PageSizeToBytes(INIT_HEAP_PAGE_SIZE)/4; k += (1 << (ALLOC_PAGE_SIZE_EXPONENT-2))) {
             pInt[k] = 0;
         }
-        #endif
-    #endif
 #endif
         free_pages_ += INIT_HEAP_PAGE_SIZE;
         numa_num_to_node[node]->free_tree[INIT_HEAP_PAGE_SIZE].insert(new_chunk);
@@ -135,7 +131,7 @@ void* BuddyMemoryAllocator::MmapAlloc(size_t num_bytes, int node, const char* f,
         return HashSegAlloc();
     }
     void* res_ptr = BSTreeAlloc(num_pages, node);
-#ifdef USE_NUMA
+#if defined(USE_NUMA) || defined(TEST_NUMA_LOGIC)
     if (!res_ptr) {
         // if there is no fit chunk in current node, lookup other numa nodes
         for (int i = 0; i < numa_num_to_node.size(); i++) {
