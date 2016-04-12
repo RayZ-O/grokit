@@ -16,7 +16,7 @@
 
 #include <gtest/gtest.h>
 #include <iostream>
-#include "../headers/BuddyMemoryAllocator.h"
+#include "../headers/NumaMemoryAllocator.h"
 #include "../headers/MmapAllocator.h"
 
 using namespace std;
