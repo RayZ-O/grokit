@@ -17,10 +17,10 @@
 #define _NUMA_MMAP_ALLOC_H_
 
 #include <map>
-#include <set>
-#include <list>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
-#include <pthread.h>
+#include <mutex>
 
 #include "MmapAllocator.h"
 // Below 3 headers need for constant used for defining fixed hash size HASH_SEG_SIZE
@@ -89,150 +89,124 @@
 // Grow heap during run by this size if needed
 #define HEAP_GROW_BY_SIZE 256*16
 
-// This checks memory leaks.
-class MemoryCheck {
+#ifdef GUNIT_TEST
+#include <gtest/gtest.h>
+#endif
 
-    struct Info {
-        const char* filename;
-        int linenum;
-        size_t size;
-    };
-    typedef std::map<void*, Info*> PtrMap;
-    PtrMap ptrToInfoMap;
-
-    public:
-    MemoryCheck();
-
-    void Insert(void* ptr, size_t _size, const char* _filename, int _linenum);
-
-    void Delete(void* ptr);
-
-    void Print();
-};
+class ChunkInfo;
 
 class NumaMemoryAllocator {
-
-    pthread_mutex_t mutex; // to guard the implementation
-
-#ifdef MMAP_CHECK
-    MemoryCheck memChk;
+#ifdef GUNIT_TEST
+    // declare friend to test private member of allocator class
+    friend class AllocatorTest;
 #endif
+    // mutex used to make the allocater thread safe
+    std::mutex mtx_;
+    // mark if the internal data structures are initialized
+    bool is_initialized_;
+    // number of allocated pages
+    int allocated_pages_;
+    // number of free pages
+    int free_pages_;
+    // page size of hash segment
+    const int kHashSegPageSize;
+    // page aligned hash segment size
+    const size_t kHashSegAlignedSize;
+    // reserve fixed size chunk for hash entry
+    std::vector<void*> reserved_hash_segs;
 
-
-    bool mHeapInitialized;
-    struct NumaNode; // forward declaration
-
-    /* Keep the record of all chunks, allocated and unallocated both (for coalesce)
-       This contains the header information per allocated chunk (using mmap_alloc)
-       This header will be used to merge two free chunks to create bigger chunk to reduce
-       fragmentation
-       */
-    struct ChunkInfo{
-        ChunkInfo* prevChunk; // pointer to previous physical chunk
-        ChunkInfo* nextChunk; // pointer to next physical chunk
-        void* currentPtr;     // Keep current pointer too for ease of code
-        NumaNode* numaNode;
-
-        union SizeInfo{
-            struct SizeStruct{
-                int size; // size of current chunk in pages, dont use size_t
-                bool isFree; // Is current chunk free?
-            };
-            SizeStruct sizeStruct;
-            void* Align;
-        };
-
-        SizeInfo sizeInfo; // void* aligned
-    };
-
-    // This keeps track of all freelists per numa node
     struct NumaNode{
-        std::map<int, std::set<void*>*> mSizeToFreeListMap;
+        // binary search tree of free list
+        std::map<int, std::unordered_set<void*>> free_tree;
     };
+    // store the relation between numa number and numa nodes
+    std::vector<NumaNode*> numa_num_to_node;
+    // store chunk info in external data structure to avoid breaking DMA
+    std::unordered_set<void*> occupied_hash_segs;
+    std::unordered_map<void*, ChunkInfo*> ptr_to_bstchunk;
 
-    // map to keep track of allocated data to verify double free error
-    typedef std::map< void*, int > SizeMap;
-    SizeMap sizeMap; // the map from pointers to the size allocated (in pages)
+    size_t PageSizeToBytes(int page_size);
 
-
-#ifndef STORE_HEADER_IN_CHUNK
-    std::map<void*, ChunkInfo*> mPtrToChunkInfoMap;
-
-    // Avoid new and delete, keep deletes chunks for future use.
-    std::list<ChunkInfo*> mDeletedChunks;
-#endif
-    // Avoid new and delete, keep deleted lists for future use.
-    std::list<std::set<void*>*> mDeletedLists;
-
-    // Hash for numa number to numa pointer, speed up lookup
-    std::vector<NumaNode*> mNumaNumberToNumaNode;
-
-    // special list for fixed size hash segments, no relation to other guys
-    std::set<void*> fixedSizeList;
-    std::set<void*> fixedSizeOccupiedList;
-
-    // translator from bytes to pages
-    // rounds up the size
     int BytesToPageSize(size_t bytes);
-    size_t PageSizeToBytes(int pSize);
+    // get pointer that point to num_pages(convert to bytes) behind ptr
+    void* PtrSeek(void* ptr, int num_pages);
+    // erase pointer in the given size set in free tree
+    void EraseTreePtr(int size, void* ptr, int node);
+    // update number of allocated pages and free pages
+    void UpdateStatus(int allocated_size);
 
-    //static NumaMemoryAllocator& singleton();
+    void GrowHeap(int num_pages, int node);
 
-    NumaMemoryAllocator(NumaMemoryAllocator&); // block the copy constructor
-
-    // Update our freelist, either in case of merging chunks, allocating memory or
-    // freeing memory operations
-    void UpdateFreelist(ChunkInfo* chunkInfo);
-
-    // If chunk is allocated, it is not free anymore. Remove from our freelist
-    void RemoveFromFreelist(ChunkInfo* chunkInfo);
-
-    // This merges two adjacent free chunks. Adjacent chunks would mean they must
-    // be adjacent in physical memory
-    void Coalesce(void* ptr);
-
-    // This initializes the heap (for all nodes in case of NUMA) in very first call of mmap_alloc
     void HeapInit();
 
-    // Helper function to reduce same code at multiple places
-    void SearchFreeList(NumaNode*, int pSize, bool& exactListFound, bool& biggerListFound,
-            std::map<int, std::set<void*>*>::iterator& iter,
-            std::map<int, std::set<void*>*>::reverse_iterator& r_iter);
+    void* HashSegAlloc();
 
-    // Helper function to reduce same code at multiple places
-    void SearchFreeListSmallestFirst(NumaNode*, int pSize, bool& exactListFound, bool& biggerListFound,
-            std::map<int, std::set<void*>*>::iterator& iter);
+    void* BSTreeAlloc(int num_pages, int node);
 
-    public:
-    // default constructor; initializes the allocator
+    void BSTreeFree(void* ptr);
+
+public:
     NumaMemoryAllocator(void);
 
-    // function to get access to the singleton instance
+    NumaMemoryAllocator(const NumaMemoryAllocator& rhs) = delete;
+
+    NumaMemoryAllocator& operator =(const NumaMemoryAllocator& rhs) = delete;
+
+    ~NumaMemoryAllocator(void);
+
     static NumaMemoryAllocator& GetAllocator(void);
 
-    // functin to allocate
-    void* MmapAlloc(size_t noBytes, int numaNode = 0, const char* file = NULL, int line=-1);
+    void* MmapAlloc(size_t noBytes, int node, const char* f, int l);
 
-    // change the protection to prot: must be a combination of PROT_READ and PROT_WRITE
     void MmapChangeProt(void* ptr, int prot);
 
-    // function to deallocate
     void MmapFree(void* ptr);
 
-    // function to get size of allocated memory
-    int SizeAlloc(void* ptr);
+    size_t AllocatedPages() const;
 
-    // Tells the size which is still allocated
-    size_t AllocatedPages();
-    size_t FreePages();
+    size_t FreePages() const;
+};
 
-#ifdef MMAP_CHECK
-    void Diagnose();
+class ChunkInfo {
+public:
+    void* mem_ptr;
+    int size;
+    int node;  // numa node number
+    bool used;
+    ChunkInfo* prev; // pointer to previous physical chunk
+    ChunkInfo* next; // pointer to next physical chunk
+
+    ChunkInfo(void* ptr, int s, int nd, bool u, ChunkInfo* p, ChunkInfo* n);
+    // deletes cpoy constructor
+    ChunkInfo(const ChunkInfo& other) = delete;
+    // deletes copy assignment operator
+    ChunkInfo& operator = (const ChunkInfo& other) = delete;
+    // assigns values to the chunk
+    void Assign(void* ptr, int s, int nd, bool u, ChunkInfo* p, ChunkInfo* n);
+    // splits current chunk into two chunks of new_size and size - new_size
+    ChunkInfo* Split(int new_size);
+    // gets pointer that point to num_pages(convert to bytes) behind ptr
+    void* PtrSeek(void* ptr, int num_pages);
+    // coalesces with the previous chunk
+    ChunkInfo* CoalescePrev();
+    // coalesces with the next chunk
+    ChunkInfo* CoalesceNext();
+    // gets chunk from chunk pool
+    static ChunkInfo* GetChunk(void* ptr, int s, int node, bool u, ChunkInfo* p, ChunkInfo* n);
+    // puts tree chunk back to chunk pool
+    static void PutChunk(ChunkInfo* chunk);
+    // free all cached free chunks
+    static void FreeChunks();
+
+#ifdef GUNIT_TEST
+    // override ostream operator for pretty print
+    friend std::ostream& operator <<(std::ostream &output, ChunkInfo &chunk);
 #endif
 
-    // Destructor (frees the mmaps)
-    ~NumaMemoryAllocator(void);
+private:
+    static std::vector<ChunkInfo*> bstchunk_pool;  // chunk pool
 };
+
 
 // To avoid static initialization order fiasco. This is needed only if our allocator
 // is used to initialize some global or static objects, where the ordering of
@@ -245,4 +219,4 @@ NumaMemoryAllocator& NumaMemoryAllocator::GetAllocator(void){
     return *singleton;
 }
 
-#endif // _BIGCHUNK_MMAP_ALLOC_H_
+#endif

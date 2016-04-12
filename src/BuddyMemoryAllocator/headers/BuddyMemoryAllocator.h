@@ -1,5 +1,6 @@
 //
-//  Copyright 2015 Rui Zhang, 2012 Alin Dobra and Christopher Jermaine
+//  Copyright 2012 Alin Dobra and Christopher Jermaine,
+//            2015 Rui Zhang
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -18,17 +19,12 @@
 
 #include <map>
 #include <unordered_map>
-#include <set>
 #include <unordered_set>
-#include <list>
 #include <vector>
 #include <mutex>
 
-#include <gtest/gtest.h>
-
 #include "MmapAllocator.h"
 #include "BSTChunk.h"
-#include "BuddyChunk.h"
 #include "AllocatorUtil.h"
 // Below 3 headers need for constant used for defining fixed hash size HASH_SEG_SIZE
 #include "HashTableMacros.h"
@@ -66,8 +62,9 @@
 // Grow heap during run by this size if needed
 #define HEAP_GROW_BY_SIZE 256*16
 
-// Maximum order in the buddy system
-#define MAX_ORDER 10
+#ifdef GUNIT_TEST
+#include <gtest/gtest.h>
+#endif
 
 class BuddyMemoryAllocator {
 
@@ -83,46 +80,35 @@ class BuddyMemoryAllocator {
     int allocated_pages_;
     // number of free pages
     int free_pages_;
-    // STYLE google code style constant naming
     // page size of hash segment
     const int kHashSegPageSize;
     // page aligned hash segment size
     const size_t kHashSegAlignedSize;
-    // Use buddy allocation when the request under threshold, otherwise use binary search tree
-    const int kBuddyHeapSize;
-    // buddy bin size look up table
-    std::vector<int> buddy_bin_size_table;
-    // point to the beginning of buddy memory
-    void* buddy_base;
     // reserve fixed size chunk for hash entry
     std::vector<void*> reserved_hash_segs;
-    // array of free list in buddy system
-    // TODO vector + reserve may be faster than list
-    std::vector<std::list<int>> free_area;
-    // binary search tree of free list
-    std::map<int, std::unordered_set<void*>> free_tree;
+
+    struct NumaNode{
+        // binary search tree of free list
+        std::map<int, std::unordered_set<void*>> free_tree;
+    };
+    // store the relation between numa number and numa nodes
+    std::vector<NumaNode*> numa_num_to_node;
     // store chunk info in external data structure to avoid breaking DMA
     std::unordered_set<void*> occupied_hash_segs;
-    std::unordered_map<void*, BuddyChunk*> ptr_to_budchunk;
     std::unordered_map<void*, BSTreeChunk*> ptr_to_bstchunk;
 
-    int GetOrder(int page_size);
     // erase pointer in the given size set in free tree
-    void EraseTreePtr(int size, void* ptr);
+    void EraseTreePtr(int size, void* ptr, int node);
     // update number of allocated pages and free pages
     void UpdateStatus(int allocated_size);
+
+    void GrowHeap(int num_pages, int node);
 
     void HeapInit();
 
     void* HashSegAlloc();
 
-    void* BuddyAlloc(int num_pages, int node);
-
     void* BSTreeAlloc(int num_pages, int node);
-
-    void BuddyFree(void* ptr);
-
-    void UpdateFreeInfo(std::pair<BSTreeChunk*, bool> &&p);
 
     void BSTreeFree(void* ptr);
 

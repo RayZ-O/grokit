@@ -31,15 +31,12 @@ int subtract(void* ptr1, void* ptr2) {
 
 class AllocatorTest : public ::testing::Test {
 protected:
-    static constexpr int kBuddyHeapSize = 1 << MAX_ORDER;
-    static constexpr int kBSTHeapSize = INIT_HEAP_PAGE_SIZE - (1 << MAX_ORDER);
+    static constexpr int kBSTHeapSize = INIT_HEAP_PAGE_SIZE;
     BuddyMemoryAllocator& aloc;
-    int node;
     char* filename;
     int linenum;
 
     AllocatorTest() : aloc(BuddyMemoryAllocator::GetAllocator()) {
-        node = 0;
         filename = nullptr;
         linenum = 0;
     }
@@ -49,8 +46,7 @@ protected:
     }
 
     virtual void TearDown() {
-        EXPECT_EQ(0, aloc.AllocatedPages());
-        EXPECT_EQ(aloc.FreePages(), GetFreeBuddySize() + GetFreeBSTSize());
+        EXPECT_EQ(0, mmap_used());
     }
 
     // write the tests as members of the fixture class to access private members,
@@ -58,44 +54,33 @@ protected:
     // tests(sub-classes of the fixture) are not automatically friends to it
     void AllocateZeroTest();
     void HashSegTest();
-    // buddy system tests
-    void GetBuddyOrderTest();
-    void BuddySplitTest();
-    void BuddyCoalesceTest();
-    void BuddyFixedSizeTest();
-    void BuddySmallToLargeTest();
-    void BuddyLargeToSmallTest();
-    void BuddyIncreasingFillTest();
-    void BuddyDecreasingFillTest();
-    void BuddyVariousFillTest();
-    void BuddyFreeHalfRefillTest();
-    // binary tree syetem tests
-    void BstAllocateTest();
-    void BstFreeTest();
-    // TODO more bst tests
-    void HybridAllocateTest();
+    // binary tree allocator tests
+    void BstFreePagesTest();
+    void BstChangeProtTest();
+    void BstChunkPointerTest();
+    void BstCoalesceTest();
+    void BstFixedSizeTest();
+    void BstSmallToLargeTest();
+    void BstLargeToSmallTest();
+    void BstIncreasingFillTest();
+    void BstDecreasingFillTest();
+    void BstVariousFillTest();
+    void BstFreeHalfRefillTest1();
+    void BstFreeHalfRefillTest2();
+    void BstFreeOneThirdRefillTest();
+    void MultiNodeAllocateTest();
+    void MultiNodeFreeTest();
+    void BstHeapGrowTest();
     // pretty print the internal data structure infomation
-    void PrintBuddyPtrMap();
     void PrintBSTPtrMap();
-    void PrintFreeArea();
-    void PrintFreeTree();
+    void PrintFreeTree(int node);
     // use the internal data structure to calculate allocated and free pages
-    int GetAllocatedBuddySize();
-    int GetFreeBuddySize();
     int GetAllocatedBSTSize();
-    int GetFreeBSTSize();
+    int GetFreeBSTSize(int node);
+    int GetTreeSize(int node);
 };
 
-constexpr int AllocatorTest::kBuddyHeapSize;
 constexpr int AllocatorTest::kBSTHeapSize;
-
-void AllocatorTest::PrintBuddyPtrMap() {
-    cout << "------------Ptr to BUDDY---------------" << endl;
-    for (const auto p : aloc.ptr_to_budchunk) {
-        cout << *p.second << endl;
-    }
-    cout << "---------------------------------------" << endl;
-}
 
 void AllocatorTest::PrintBSTPtrMap() {
     cout << "------------Ptr to BST-----------------" << endl;
@@ -105,21 +90,9 @@ void AllocatorTest::PrintBSTPtrMap() {
     cout << "---------------------------------------" << endl;
 }
 
-void AllocatorTest::PrintFreeArea() {
-    cout << "-------------Free Area-----------------" << endl;
-    for (int i = 0; i < aloc.free_area.size(); i++) {
-        cout << "order " << i << ": ";
-        for (int idx : aloc.free_area[i]) {
-            cout << idx << " ";
-        }
-        cout << endl;
-    }
-    cout << "---------------------------------------" << endl;
-}
-
-void AllocatorTest::PrintFreeTree() {
+void AllocatorTest::PrintFreeTree(int node) {
     cout << "-------------Free Tree-----------------" << endl;
-    for (const auto p : aloc.free_tree) {
+    for (const auto p : aloc.numa_num_to_node[node]->free_tree) {
         cout << "size in tree: " << p.first << endl;
         for (const auto ptr : p.second) {
             cout << *aloc.ptr_to_bstchunk[ptr] << endl;
@@ -127,23 +100,6 @@ void AllocatorTest::PrintFreeTree() {
         cout << endl;
     }
     cout << "---------------------------------------" << endl;
-}
-
-int AllocatorTest::GetAllocatedBuddySize() {
-    int size = 0;
-    for (const auto p : aloc.ptr_to_budchunk) {
-        if (p.second->used)
-            size += p.second->size;
-    }
-    return size;
-}
-
-int AllocatorTest::GetFreeBuddySize() {
-    int size = 0;
-    for (int i = 0; i < aloc.free_area.size(); i++) {
-        size += aloc.free_area[i].size() * (1 << i);
-    }
-    return size;
 }
 
 int AllocatorTest::GetAllocatedBSTSize() {
@@ -155,268 +111,67 @@ int AllocatorTest::GetAllocatedBSTSize() {
     return size;
 }
 
-int AllocatorTest::GetFreeBSTSize() {
+int AllocatorTest::GetFreeBSTSize(int node) {
     int size = 0;
-    for (const auto p : aloc.free_tree) {
+    for (const auto p : aloc.numa_num_to_node[node]->free_tree) {
         size += p.first * p.second.size();
     }
     return size;
 }
 
+int AllocatorTest::GetTreeSize(int node) {
+    return aloc.numa_num_to_node[node]->free_tree.size();
+}
+
 void AllocatorTest::AllocateZeroTest() {
-    EXPECT_TRUE(mmap_alloc(0_page, node) == nullptr);
+    EXPECT_TRUE(mmap_alloc(0_page, 0) == nullptr);
 }
 
 void AllocatorTest::HashSegTest() {
-    void* ptr = mmap_alloc(PageSizeToBytes(aloc.kHashSegPageSize), node);
+    void* ptr = mmap_alloc(PageSizeToBytes(aloc.kHashSegPageSize), 0);
     EXPECT_TRUE(ptr != nullptr);
     EXPECT_EQ(1, aloc.occupied_hash_segs.size());
     EXPECT_EQ(0, aloc.reserved_hash_segs.size());
     mmap_free(ptr);
     EXPECT_EQ(0, aloc.occupied_hash_segs.size());
     EXPECT_EQ(1, aloc.reserved_hash_segs.size());
-    ptr = mmap_alloc(PageSizeToBytes(aloc.kHashSegPageSize), node);
+    ptr = mmap_alloc(PageSizeToBytes(aloc.kHashSegPageSize), 0);
     EXPECT_TRUE(ptr != nullptr);
     EXPECT_EQ(0, aloc.reserved_hash_segs.size());
     mmap_free(ptr);
 }
 
-void AllocatorTest::GetBuddyOrderTest() {
-    EXPECT_EQ(0, aloc.GetOrder(1));
-    EXPECT_EQ(1, aloc.GetOrder(2));
-    EXPECT_EQ(2, aloc.GetOrder(3));
-    EXPECT_EQ(2, aloc.GetOrder(4));
-    EXPECT_EQ(3, aloc.GetOrder(7));
-    EXPECT_EQ(4, aloc.GetOrder(16));
-    EXPECT_EQ(5, aloc.GetOrder(29));
-    EXPECT_EQ(6, aloc.GetOrder(40));
-    EXPECT_EQ(8, aloc.GetOrder(254));
+void AllocatorTest::BstFreePagesTest() {
+    int tot_size = INIT_HEAP_PAGE_SIZE * aloc.numa_num_to_node.size();
+    EXPECT_EQ(tot_size, aloc.FreePages());
+    void* ptr = mmap_alloc(PageSizeToBytes(aloc.kHashSegPageSize), 0);
+    EXPECT_EQ(tot_size, aloc.FreePages());
+    mmap_free(ptr);
+    ptr = mmap_alloc(PageSizeToBytes(10), 0);
+    EXPECT_EQ(tot_size - 10, aloc.FreePages());
+    mmap_free(ptr);
+    EXPECT_EQ(tot_size, aloc.FreePages());
 }
 
-void AllocatorTest::BuddySplitTest() {
+void AllocatorTest::BstChangeProtTest() {
+    void* ptr = mmap_alloc(PageSizeToBytes(1), 0);
+    mmap_prot_read(ptr);
+    char c = *(reinterpret_cast<char*>(ptr));
+    mmap_prot_readwrite(ptr);
+    int* pInt = reinterpret_cast<int*>(ptr);
+    pInt[0] = 1;
+    mmap_free(ptr);
+}
+
+void AllocatorTest::BstChunkPointerTest() {
     vector<void*> ptrs;
-    ptrs.push_back(mmap_alloc(1_page, node));
-    // after allocating 1 page, each free list should have 1 element
-    for (int i = 0; i < MAX_ORDER; i++) {
-        EXPECT_EQ(1, aloc.free_area[i].size());
-    }
-    ptrs.push_back(mmap_alloc(4_page, node));
-    EXPECT_EQ(0, aloc.free_area[2].size());
-    // allocate 4 pages(order 2) twice, 8 pages(order 3) block will be splitted
-    ptrs.push_back(mmap_alloc(4_page, node));
-    EXPECT_EQ(1, aloc.free_area[2].size());
-    EXPECT_EQ(0, aloc.free_area[3].size());
-    ptrs.push_back(mmap_alloc(8_page, node));
-    EXPECT_EQ(1, aloc.free_area[3].size());
-    EXPECT_EQ(0, aloc.free_area[4].size());
-    EXPECT_EQ(aloc.AllocatedPages(), GetAllocatedBuddySize());
-    for (auto p : ptrs) {
-        mmap_free(p);
-    }
-    EXPECT_EQ(0, GetAllocatedBuddySize());
-    EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
-}
-
-void AllocatorTest::BuddyCoalesceTest() {
-    void* ptr_2p = mmap_alloc(2_page, node);
-    for (int i = 1; i < MAX_ORDER; i++) {
-        EXPECT_EQ(1, aloc.free_area[i].size());
-    }
-    mmap_free(ptr_2p);
-    // after free all free block coalesce to largest block
-    EXPECT_EQ(1, aloc.free_area[MAX_ORDER].size());
-    void* ptr_8p = mmap_alloc(8_page, node);
-    // allocate 4 pages to split buddy block
-    void* ptr_4p = mmap_alloc(4_page, node);
-    mmap_free(ptr_8p);
-    // size of buddy is 4, no coalesce
-    EXPECT_EQ(1, aloc.free_area[3].size());
-    mmap_free(ptr_4p);
-    EXPECT_EQ(1, aloc.free_area[MAX_ORDER].size());
-    ptr_8p = mmap_alloc(8_page, node);
-    void* ptr_8p2 = mmap_alloc(8_page, node);
-    mmap_free(ptr_8p);
-    // buddy in use, no coalesce
-    EXPECT_EQ(1, aloc.free_area[3].size());
-    mmap_free(ptr_8p2);
-    EXPECT_EQ(1, aloc.free_area[MAX_ORDER].size());
-}
-
-void AllocatorTest::BuddyFixedSizeTest() {
-    // repeatedly allocate fixed size pages
-    for (int size = 1, order = 0; size < kBuddyHeapSize; size <<= 1, order++) {
-    // for (int size = 64, order = 6; size < kBuddyHeapSize; size <<= 1, order++) {
-        vector<void*> ptrs;
-        for (int i = 1; i < kBuddyHeapSize / size; i++) {
-            ptrs.push_back(mmap_alloc(PageSizeToBytes(size), node));
-            EXPECT_TRUE(ptrs.back() != nullptr);
-            EXPECT_EQ(i * size, aloc.AllocatedPages());
-            EXPECT_EQ(aloc.AllocatedPages(), GetAllocatedBuddySize());
-            EXPECT_EQ(i % 2, aloc.free_area[order].size());
-        }
-        EXPECT_EQ(size , GetFreeBuddySize());
-        for (auto p : ptrs) {
-            mmap_free(p);
-        }
-        EXPECT_EQ(0, GetAllocatedBuddySize());
-        EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
-        EXPECT_EQ(1, aloc.free_area[MAX_ORDER].size());
-    }
-}
-
-void AllocatorTest::BuddySmallToLargeTest() {
-    vector<void*> ptrs;
-    ptrs.push_back(mmap_alloc(1_page, node));
-    int num_ptrs = aloc.ptr_to_budchunk.size();
-    for (int size = 2, i = 1; size < kBuddyHeapSize; size <<= 1, i++) {
-        ptrs.push_back(mmap_alloc(PageSizeToBytes(size), node));
-        EXPECT_TRUE(ptrs.back() != nullptr);
-        EXPECT_EQ(0, aloc.free_area[i].size());
-        EXPECT_EQ(num_ptrs, aloc.ptr_to_budchunk.size());
-    }
-    EXPECT_EQ(kBuddyHeapSize - 1, GetAllocatedBuddySize());
-    EXPECT_EQ(1, GetFreeBuddySize());
-    for (auto p : ptrs) {
-        mmap_free(p);
-    }
-    EXPECT_EQ(0, GetAllocatedBuddySize());
-    EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
-}
-
-void AllocatorTest::BuddyLargeToSmallTest() {
-    vector<void*> ptrs;
-    int num_ptrs = 1;
-    for (int size = kBuddyHeapSize >> 1, i = MAX_ORDER - 1; size >= 2; size >>= 1, i--) {
-        ptrs.push_back(mmap_alloc(PageSizeToBytes(size), node));
-        EXPECT_TRUE(ptrs.back() != nullptr);
-        EXPECT_EQ(1, aloc.free_area[i].size());
-        EXPECT_EQ(++num_ptrs, aloc.ptr_to_budchunk.size());
-    }
-    EXPECT_EQ(kBuddyHeapSize - 2, GetAllocatedBuddySize());
-    EXPECT_EQ(2, GetFreeBuddySize());
-    for (auto p : ptrs) {
-        mmap_free(p);
-    }
-    EXPECT_EQ(0, GetAllocatedBuddySize());
-    EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
-}
-
-void AllocatorTest::BuddyIncreasingFillTest() {
-    vector<void*> ptrs;
-    int tot_size = 0;
-    // allocate increasing sequence
-    for (int p_size : {1, 1, 2, 3, 5, 8, 13, 21}) {
-        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), node));
-        EXPECT_TRUE(ptrs.back() != nullptr);
-        tot_size += 1 << aloc.GetOrder(p_size);
-        EXPECT_EQ(tot_size, GetAllocatedBuddySize());
-    }
-    for (int i = 0; i < 3; i++) {
-        EXPECT_EQ(0, aloc.free_area[i].size());
-        EXPECT_EQ(1, aloc.free_area[i + 3].size());
-    }
-    for (auto p : ptrs) {
-        mmap_free(p);
-    }
-    EXPECT_EQ(0, GetAllocatedBuddySize());
-    EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
-}
-
-void AllocatorTest::BuddyDecreasingFillTest() {
-    vector<void*> ptrs;
-    int tot_size = 0;
-    // allocate decreasing sequence
-    for (int p_size : {25, 16, 9, 4, 1}) {
-        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), node));
-        EXPECT_TRUE(ptrs.back() != nullptr);
-        tot_size += 1 << aloc.GetOrder(p_size);
-        EXPECT_EQ(tot_size, GetAllocatedBuddySize());
-    }
-    EXPECT_EQ(1, aloc.free_area[0].size());
-    EXPECT_EQ(1, aloc.free_area[1].size());
-    EXPECT_EQ(1, aloc.free_area[3].size());
-    EXPECT_EQ(1, aloc.free_area[4].size());
-    EXPECT_EQ(1, aloc.free_area[5].size());
-    EXPECT_EQ(0, aloc.free_area[2].size());
-    EXPECT_EQ(0, aloc.free_area[6].size());
-    for (auto p : ptrs) {
-        mmap_free(p);
-    }
-    EXPECT_EQ(0, GetAllocatedBuddySize());
-    EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
-}
-
-void AllocatorTest::BuddyVariousFillTest() {
-    vector<void*> ptrs;
-    int tot_size = 0;
-    for (int p_size : {7, 3, 2, 5, 14, 50, 15, 3}) {
-        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), node));
-        EXPECT_TRUE(ptrs.back() != nullptr);
-        tot_size += 1 << aloc.GetOrder(p_size);
-        EXPECT_EQ(tot_size, GetAllocatedBuddySize());
-    }
-    EXPECT_EQ(1, aloc.free_area[1].size());
-    EXPECT_EQ(1, aloc.free_area[2].size());
-    EXPECT_EQ(0, aloc.free_area[0].size());
-    EXPECT_EQ(0, aloc.free_area[3].size());
-    EXPECT_EQ(0, aloc.free_area[4].size());
-    EXPECT_EQ(0, aloc.free_area[5].size());
-    EXPECT_EQ(0, aloc.free_area[6].size());
-    for (auto p : ptrs) {
-        mmap_free(p);
-    }
-    EXPECT_EQ(0, GetAllocatedBuddySize());
-    EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
-}
-
-void AllocatorTest::BuddyFreeHalfRefillTest() {
-    vector<void*> ptrs;
-    vector<int> sizes{7, 3, 2, 5, 14, 50, 15, 3};
-    int tot_size = 0;
-    for (int p_size : sizes) {
-        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), node));
-        EXPECT_TRUE(ptrs.back() != nullptr);
-        tot_size += 1 << aloc.GetOrder(p_size);
-    }
-    // free half of allocated blocks
-    for (int i = 0; i < ptrs.size(); i++) {
-        if (i % 2) {
-            mmap_free(ptrs[i]);
-            ptrs[i] = nullptr;
-            tot_size -= 1 << aloc.GetOrder(sizes[i]);
-            EXPECT_EQ(tot_size, GetAllocatedBuddySize());
-        }
-    }
-    for (int p_size : {2, 31, 4, 7}) {
-        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), node));
-        EXPECT_TRUE(ptrs.back() != nullptr);
-        tot_size += 1 << aloc.GetOrder(p_size);
-        EXPECT_EQ(tot_size, GetAllocatedBuddySize());
-    }
-    EXPECT_EQ(0, aloc.free_area[0].size());
-    EXPECT_EQ(0, aloc.free_area[1].size());
-    EXPECT_EQ(0, aloc.free_area[2].size());
-    EXPECT_EQ(1, aloc.free_area[3].size());
-    EXPECT_EQ(0, aloc.free_area[4].size());
-    EXPECT_EQ(1, aloc.free_area[5].size());
-    EXPECT_EQ(0, aloc.free_area[6].size());
-    for (auto p : ptrs) {
-        if (p) mmap_free(p);
-    }
-    EXPECT_EQ(0, GetAllocatedBuddySize());
-    EXPECT_EQ(kBuddyHeapSize, GetFreeBuddySize());
-}
-
-void AllocatorTest::BstAllocateTest() {
-    vector<void*> ptrs;
+    int num_ptrs = aloc.ptr_to_bstchunk.size();
     for (int i = 1; i <= 3; i++) {
-        ptrs.push_back(mmap_alloc(PageSizeToBytes(kBuddyHeapSize + i * 10), node));
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(i * 10), 0));
         EXPECT_TRUE(ptrs.back() != nullptr);
-        EXPECT_EQ(i + 1, aloc.ptr_to_bstchunk.size());
+        EXPECT_EQ(num_ptrs + i, aloc.ptr_to_bstchunk.size());
     }
-
-    EXPECT_EQ(aloc.AllocatedPages(), GetAllocatedBSTSize());
-    EXPECT_EQ(kBSTHeapSize - aloc.AllocatedPages(), GetFreeBSTSize());
+    EXPECT_EQ(kBSTHeapSize - aloc.AllocatedPages(), GetFreeBSTSize(0));
     // check sibling list
     for (const auto p : aloc.ptr_to_bstchunk) {
         if (p.second->next)
@@ -427,60 +182,288 @@ void AllocatorTest::BstAllocateTest() {
     for (auto p : ptrs) {
         mmap_free(p);
     }
-    EXPECT_EQ(1, aloc.free_tree.size());
-    EXPECT_EQ(1, aloc.ptr_to_bstchunk.size());
+    EXPECT_EQ(1, GetTreeSize(0));
+    EXPECT_EQ(num_ptrs, aloc.ptr_to_bstchunk.size());
     EXPECT_EQ(0, GetAllocatedBSTSize());
-    EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize());
+    EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize(0));
 }
 
-void AllocatorTest::BstFreeTest() {
+void AllocatorTest::BstCoalesceTest() {
     vector<void*> ptrs;
+    int num_ptrs = aloc.ptr_to_bstchunk.size();
     for (int i = 1; i <= 3; i++) {
-        ptrs.push_back(mmap_alloc(PageSizeToBytes(kBuddyHeapSize + i * 10), node));
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(i * 10), 0));
         EXPECT_TRUE(ptrs.back() != nullptr);
-        EXPECT_EQ(i + 1, aloc.ptr_to_bstchunk.size());
+        EXPECT_EQ(num_ptrs + i, aloc.ptr_to_bstchunk.size());
     }
     mmap_free(ptrs[1]);
-    EXPECT_EQ(4, aloc.ptr_to_bstchunk.size());
+    EXPECT_EQ(num_ptrs + 3, aloc.ptr_to_bstchunk.size());
     mmap_free(ptrs[2]);
-    EXPECT_EQ(2, aloc.ptr_to_bstchunk.size());
+    EXPECT_EQ(num_ptrs + 1, aloc.ptr_to_bstchunk.size());
     mmap_free(ptrs[0]);
-    EXPECT_EQ(1, aloc.ptr_to_bstchunk.size());
+    EXPECT_EQ(num_ptrs, aloc.ptr_to_bstchunk.size());
     EXPECT_EQ(0, GetAllocatedBSTSize());
-    EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize());
+    EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize(0));
+    EXPECT_EQ(1, GetTreeSize(0));
 }
 
-void AllocatorTest::HybridAllocateTest() {
+void AllocatorTest::BstFixedSizeTest() {
+    for (int size = 1; size < kBSTHeapSize; size <<= 1) {
+        vector<void*> ptrs;
+        for (int i = 1; i < kBSTHeapSize / size; i++) {
+            ptrs.push_back(mmap_alloc(PageSizeToBytes(size), 0));
+            EXPECT_TRUE(ptrs.back() != nullptr);
+            EXPECT_EQ(i * size, aloc.AllocatedPages());
+            EXPECT_EQ(aloc.AllocatedPages(), GetAllocatedBSTSize());
+        }
+        for (auto p : ptrs) {
+            mmap_free(p);
+        }
+        EXPECT_EQ(0, GetAllocatedBSTSize());
+        EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize(0));
+        EXPECT_EQ(1, GetTreeSize(0));
+    }
+}
+
+void AllocatorTest::BstSmallToLargeTest() {
     vector<void*> ptrs;
-    ptrs.push_back(mmap_alloc(PageSizeToBytes(kBuddyHeapSize - 1), node));
-    ptrs.push_back(mmap_alloc(2_page, node));
-    EXPECT_EQ(2, aloc.ptr_to_bstchunk.size());
-    EXPECT_EQ(aloc.AllocatedPages(), GetAllocatedBuddySize() + GetAllocatedBSTSize());
-    mmap_free(ptrs[0]);
-    ptrs[0] = mmap_alloc(2_page, node);
-    EXPECT_EQ(2, aloc.ptr_to_bstchunk.size());
+    int num_ptrs = aloc.ptr_to_bstchunk.size();
+    for (int size = 1; size < kBSTHeapSize; size <<= 1) {
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(size), 0));
+        EXPECT_TRUE(ptrs.back() != nullptr);
+        EXPECT_EQ(++num_ptrs, aloc.ptr_to_bstchunk.size());
+    }
+    EXPECT_EQ(kBSTHeapSize - 1, GetAllocatedBSTSize());
+    EXPECT_EQ(1, GetFreeBSTSize(0));
     for (auto p : ptrs) {
         mmap_free(p);
     }
     EXPECT_EQ(0, GetAllocatedBSTSize());
-    EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize());
+    EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize(0));
+    EXPECT_EQ(1, GetTreeSize(0));
 }
+
+void AllocatorTest::BstLargeToSmallTest() {
+    vector<void*> ptrs;
+    int num_ptrs = aloc.ptr_to_bstchunk.size();
+    for (int size = kBSTHeapSize >> 1; size >= 1; size >>= 1) {
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(size), 0));
+        EXPECT_TRUE(ptrs.back() != nullptr);
+        EXPECT_EQ(++num_ptrs, aloc.ptr_to_bstchunk.size());
+    }
+    EXPECT_EQ(kBSTHeapSize - 1, GetAllocatedBSTSize());
+    EXPECT_EQ(1, GetFreeBSTSize(0));
+    for (auto p : ptrs) {
+        mmap_free(p);
+    }
+    EXPECT_EQ(0, GetAllocatedBSTSize());
+    EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize(0));
+    EXPECT_EQ(1, GetTreeSize(0));
+}
+
+void AllocatorTest::BstVariousFillTest() {
+    vector<void*> ptrs;
+    int tot_size = 0;
+    for (int p_size : {7, 14, 2, 5, 14, 50, 15, 3, 127, 32, 1, 8}) {
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), 0));
+        EXPECT_TRUE(ptrs.back() != nullptr);
+        tot_size += p_size;
+        EXPECT_EQ(tot_size, GetAllocatedBSTSize());
+    }
+    for (auto p : ptrs) {
+        mmap_free(p);
+    }
+    EXPECT_EQ(0, GetAllocatedBSTSize());
+    EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize(0));
+    EXPECT_EQ(1, GetTreeSize(0));
+}
+
+void AllocatorTest::BstFreeHalfRefillTest1() {
+    vector<void*> ptrs;
+    vector<int> sizes{7, 14, 2, 50, 15, 127, 32, 1};
+    int tot_size = 0;
+    for (int p_size : sizes) {
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), 0));
+        EXPECT_TRUE(ptrs.back() != nullptr);
+        tot_size += p_size;
+        EXPECT_EQ(tot_size, GetAllocatedBSTSize());
+    }
+    for (int i = 0; i < ptrs.size(); i++) {
+        if (i % 2) {
+            mmap_free(ptrs[i]);
+            ptrs[i] = nullptr;
+            tot_size -= sizes[i];
+            EXPECT_EQ(tot_size, GetAllocatedBSTSize());
+        }
+    }
+    for (int p_size : {2, 31, 4, 7}) {
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), 0));
+        EXPECT_TRUE(ptrs.back() != nullptr);
+        tot_size += p_size;
+        EXPECT_EQ(tot_size, GetAllocatedBSTSize());
+    }
+    for (auto p : ptrs) {
+        if (p) {
+            mmap_free(p);
+        }
+    }
+    EXPECT_EQ(0, GetAllocatedBSTSize());
+    EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize(0));
+    EXPECT_EQ(1, GetTreeSize(0));
+}
+
+void AllocatorTest::BstFreeHalfRefillTest2() {
+    vector<void*> ptrs;
+    vector<int> sizes{7, 14, 2, 50, 15, 127, 32, 1};
+    int tot_size = 0;
+    for (int p_size : sizes) {
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), 0));
+        EXPECT_TRUE(ptrs.back() != nullptr);
+        tot_size += p_size;
+        EXPECT_EQ(tot_size, GetAllocatedBSTSize());
+    }
+    for (int i = 0; i < ptrs.size(); i++) {
+        if (!(i % 2)) {
+            mmap_free(ptrs[i]);
+            ptrs[i] = nullptr;
+            tot_size -= sizes[i];
+            EXPECT_EQ(tot_size, GetAllocatedBSTSize());
+        }
+    }
+    for (int p_size : {2, 31, 4, 7}) {
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), 0));
+        EXPECT_TRUE(ptrs.back() != nullptr);
+        tot_size += p_size;
+        EXPECT_EQ(tot_size, GetAllocatedBSTSize());
+    }
+    for (auto p : ptrs) {
+        if (p) {
+            mmap_free(p);
+        }
+    }
+    EXPECT_EQ(0, GetAllocatedBSTSize());
+    EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize(0));
+    EXPECT_EQ(1, GetTreeSize(0));
+}
+
+void AllocatorTest::BstFreeOneThirdRefillTest() {
+    vector<void*> ptrs;
+    vector<int> sizes{7, 14, 2, 50, 15, 127, 32, 1, 9};
+    int tot_size = 0;
+    for (int p_size : sizes) {
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), 0));
+        EXPECT_TRUE(ptrs.back() != nullptr);
+        tot_size += p_size;
+        EXPECT_EQ(tot_size, GetAllocatedBSTSize());
+    }
+    for (int i = 0; i < ptrs.size(); i++) {
+        if (i % 3) {
+            mmap_free(ptrs[i]);
+            ptrs[i] = nullptr;
+            tot_size -= sizes[i];
+            EXPECT_EQ(tot_size, GetAllocatedBSTSize());
+        }
+    }
+    for (int p_size : {2, 31, 4, 7, 75}) {
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(p_size), 0));
+        EXPECT_TRUE(ptrs.back() != nullptr);
+        tot_size += p_size;
+        EXPECT_EQ(tot_size, GetAllocatedBSTSize());
+    }
+    for (auto p : ptrs) {
+        if (p) {
+            mmap_free(p);
+        }
+    }
+    EXPECT_EQ(0, GetAllocatedBSTSize());
+    EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize(0));
+    EXPECT_EQ(1, GetTreeSize(0));
+}
+
+void AllocatorTest::MultiNodeAllocateTest() {
+    vector<void*> ptrs;
+    ptrs.push_back(mmap_alloc(PageSizeToBytes(kBSTHeapSize), 0));
+    EXPECT_TRUE(ptrs.back() != nullptr);
+    EXPECT_EQ(0, GetTreeSize(0));
+    ptrs.push_back(mmap_alloc(PageSizeToBytes(kBSTHeapSize), 0));
+    EXPECT_TRUE(ptrs.back() != nullptr);
+    EXPECT_EQ(0, GetTreeSize(1));
+    ptrs.push_back(mmap_alloc(PageSizeToBytes(kBSTHeapSize), 1));
+    EXPECT_TRUE(ptrs.back() != nullptr);
+    EXPECT_EQ(0, GetTreeSize(2));
+    for (auto p : ptrs) {
+        mmap_free(p);
+    }
+    EXPECT_EQ(0, GetAllocatedBSTSize());
+}
+
+void AllocatorTest::MultiNodeFreeTest() {
+    void* ptr1 = mmap_alloc(PageSizeToBytes(kBSTHeapSize), 0);
+    EXPECT_TRUE(ptr1 != nullptr);
+    EXPECT_EQ(0, GetTreeSize(0));
+    void* ptr2 = mmap_alloc(PageSizeToBytes(kBSTHeapSize), 0);
+    EXPECT_TRUE(ptr2 != nullptr);
+    EXPECT_EQ(0, GetTreeSize(1));
+    void* ptr3 = mmap_alloc(PageSizeToBytes(kBSTHeapSize), 1);
+    EXPECT_TRUE(ptr3 != nullptr);
+    EXPECT_EQ(0, GetTreeSize(2));
+    mmap_free(ptr2);
+    EXPECT_EQ(1, GetTreeSize(1));
+    mmap_free(ptr3);
+    EXPECT_EQ(1, GetTreeSize(2));
+    mmap_free(ptr1);
+    for (int i : {0, 1, 2}) {
+        EXPECT_EQ(kBSTHeapSize, GetFreeBSTSize(i));
+    }
+    EXPECT_EQ(0, GetAllocatedBSTSize());
+}
+
+#ifdef TEST_NUMA_LOGIC
+void AllocatorTest::BstHeapGrowTest() {
+    vector<void*> ptrs;
+    for (int i = 0; i < aloc.numa_num_to_node.size(); i++) {
+        ptrs.push_back(mmap_alloc(PageSizeToBytes(kBSTHeapSize), i));
+        EXPECT_TRUE(ptrs.back() != nullptr);
+    }
+    ptrs.push_back(mmap_alloc(PageSizeToBytes(kBSTHeapSize), 0));
+    for (auto p : ptrs) {
+        mmap_free(p);
+    }
+    EXPECT_EQ(0, GetAllocatedBSTSize());
+    EXPECT_EQ(HEAP_GROW_BY_SIZE + kBSTHeapSize, GetFreeBSTSize(0));
+}
+#else
+void AllocatorTest::BstHeapGrowTest() {
+    void* ptr1 = mmap_alloc(PageSizeToBytes(kBSTHeapSize), 0);
+    EXPECT_TRUE(ptr1 != nullptr);
+    void* ptr2 = mmap_alloc(PageSizeToBytes(kBSTHeapSize), 0);
+    EXPECT_TRUE(ptr2 != nullptr);
+    EXPECT_EQ(HEAP_GROW_BY_SIZE - kBSTHeapSize, GetFreeBSTSize(0));
+    mmap_free(ptr1);
+    mmap_free(ptr2);
+    EXPECT_EQ(0, GetAllocatedBSTSize());
+    EXPECT_EQ(HEAP_GROW_BY_SIZE + kBSTHeapSize, GetFreeBSTSize(0));
+}
+#endif
 
 TEST_F(AllocatorTest, AllocateZeroTest) { AllocateZeroTest(); }
 TEST_F(AllocatorTest, HashSegTest) { HashSegTest(); }
-TEST_F(AllocatorTest, GetBuddyOrderTest) { GetBuddyOrderTest(); }
-TEST_F(AllocatorTest, BuddyFixedSizeTest) { BuddyFixedSizeTest(); }
-TEST_F(AllocatorTest, BuddySplitTest) { BuddySplitTest(); }
-TEST_F(AllocatorTest, BuddyCoalesceTest) { BuddyCoalesceTest(); }
-TEST_F(AllocatorTest, BuddySmallToLargeTest) { BuddySmallToLargeTest(); }
-TEST_F(AllocatorTest, BuddyLargeToSmallTest) { BuddyLargeToSmallTest(); }
-TEST_F(AllocatorTest, BuddyIncreasingFillTest) { BuddyIncreasingFillTest(); }
-TEST_F(AllocatorTest, BuddyDecreasingFillTest) { BuddyDecreasingFillTest(); }
-TEST_F(AllocatorTest, BuddyVariousFillTest) { BuddyVariousFillTest(); }
-TEST_F(AllocatorTest, BuddyFreeHalfRefillTest) { BuddyFreeHalfRefillTest(); }
-TEST_F(AllocatorTest, BstAllocateTest) { BstAllocateTest(); }
-TEST_F(AllocatorTest, BstFreeTest) { BstFreeTest(); }
-TEST_F(AllocatorTest, HybridAllocateTest) { HybridAllocateTest(); }
+TEST_F(AllocatorTest, BstFreePagesTest) { BstFreePagesTest(); }
+TEST_F(AllocatorTest, BstChangeProtTest) { BstChangeProtTest(); }
+TEST_F(AllocatorTest, BstChunkPointerTest) { BstChunkPointerTest(); }
+TEST_F(AllocatorTest, BstCoalesceTest) { BstCoalesceTest(); }
+TEST_F(AllocatorTest, BstFixedSizeTest) { BstFixedSizeTest(); }
+TEST_F(AllocatorTest, BstSmallToLargeTest) { BstSmallToLargeTest(); }
+TEST_F(AllocatorTest, BstLargeToSmallTest) { BstLargeToSmallTest(); }
+TEST_F(AllocatorTest, BstVariousFillTest) { BstVariousFillTest(); }
+TEST_F(AllocatorTest, BstFreeHalfRefillTest1) { BstFreeHalfRefillTest1(); }
+TEST_F(AllocatorTest, BstFreeHalfRefillTest2) { BstFreeHalfRefillTest1(); }
+TEST_F(AllocatorTest, BstFreeOneThirdRefillTest) { BstFreeOneThirdRefillTest(); }
+#ifdef TEST_NUMA_LOGIC
+TEST_F(AllocatorTest, MultiNodeAllocateTest) { MultiNodeAllocateTest(); }
+TEST_F(AllocatorTest, MultiNodeFreeTest) { MultiNodeFreeTest(); }
+#endif
+TEST_F(AllocatorTest, BstHeapGrowTest) { BstHeapGrowTest(); }
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest( &argc, argv );
