@@ -93,7 +93,7 @@
 #include <gtest/gtest.h>
 #endif
 
-class ChunkInfo;
+class MemoryChunkInfo;
 
 class NumaMemoryAllocator {
 #ifdef GUNIT_TEST
@@ -123,7 +123,7 @@ class NumaMemoryAllocator {
     std::vector<NumaNode*> numa_num_to_node;
     // store chunk info in external data structure to avoid breaking DMA
     std::unordered_set<void*> occupied_hash_segs;
-    std::unordered_map<void*, ChunkInfo*> ptr_to_bstchunk;
+    std::unordered_map<void*, MemoryChunkInfo*> ptr_to_bstchunk;
 
     size_t PageSizeToBytes(int page_size);
 
@@ -167,44 +167,44 @@ public:
     size_t FreePages() const;
 };
 
-class ChunkInfo {
+class MemoryChunkInfo {
 public:
     void* mem_ptr;
     int size;
     int node;  // numa node number
     bool used;
-    ChunkInfo* prev; // pointer to previous physical chunk
-    ChunkInfo* next; // pointer to next physical chunk
+    MemoryChunkInfo* prev; // pointer to previous physical chunk
+    MemoryChunkInfo* next; // pointer to next physical chunk
 
-    ChunkInfo(void* ptr, int s, int nd, bool u, ChunkInfo* p, ChunkInfo* n);
+    MemoryChunkInfo(void* ptr, int s, int nd, bool u, MemoryChunkInfo* p, MemoryChunkInfo* n);
     // deletes cpoy constructor
-    ChunkInfo(const ChunkInfo& other) = delete;
+    MemoryChunkInfo(const MemoryChunkInfo& other) = delete;
     // deletes copy assignment operator
-    ChunkInfo& operator = (const ChunkInfo& other) = delete;
+    MemoryChunkInfo& operator = (const MemoryChunkInfo& other) = delete;
     // assigns values to the chunk
-    void Assign(void* ptr, int s, int nd, bool u, ChunkInfo* p, ChunkInfo* n);
+    void Assign(void* ptr, int s, int nd, bool u, MemoryChunkInfo* p, MemoryChunkInfo* n);
     // splits current chunk into two chunks of new_size and size - new_size
-    ChunkInfo* Split(int new_size);
+    MemoryChunkInfo* Split(int new_size);
     // gets pointer that point to num_pages(convert to bytes) behind ptr
     void* PtrSeek(void* ptr, int num_pages);
     // coalesces with the previous chunk
-    ChunkInfo* CoalescePrev();
+    MemoryChunkInfo* CoalescePrev();
     // coalesces with the next chunk
-    ChunkInfo* CoalesceNext();
+    MemoryChunkInfo* CoalesceNext();
     // gets chunk from chunk pool
-    static ChunkInfo* GetChunk(void* ptr, int s, int node, bool u, ChunkInfo* p, ChunkInfo* n);
+    static MemoryChunkInfo* GetChunk(void* ptr, int s, int node, bool u, MemoryChunkInfo* p, MemoryChunkInfo* n);
     // puts tree chunk back to chunk pool
-    static void PutChunk(ChunkInfo* chunk);
+    static void PutChunk(MemoryChunkInfo* chunk);
     // free all cached free chunks
     static void FreeChunks();
 
 #ifdef GUNIT_TEST
     // override ostream operator for pretty print
-    friend std::ostream& operator <<(std::ostream &output, ChunkInfo &chunk);
+    friend std::ostream& operator <<(std::ostream &output, MemoryChunkInfo &chunk);
 #endif
 
 private:
-    static std::vector<ChunkInfo*> bstchunk_pool;  // chunk pool
+    static std::vector<MemoryChunkInfo*> bstchunk_pool;  // chunk pool
 };
 
 

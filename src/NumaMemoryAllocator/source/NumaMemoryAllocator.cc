@@ -76,7 +76,7 @@ NumaMemoryAllocator::~NumaMemoryAllocator(void) {
     // for (auto s: reserved_hash_segs) {
     //     SYS_MMAP_FREE(s, kHashSegAlignedSize);
     // }
-    // NumaMemoryAllocator::ChunkInfo::FreeChunks();
+    // NumaMemoryAllocator::MemoryChunkInfo::FreeChunks();
 }
 
 size_t NumaMemoryAllocator::PageSizeToBytes(int page_size) {
@@ -128,7 +128,7 @@ void NumaMemoryAllocator::HeapInit() {
         free_pages_ += INIT_HEAP_PAGE_SIZE;
         numa_num_to_node[node]->free_tree[INIT_HEAP_PAGE_SIZE].insert(new_chunk);
 
-        ChunkInfo* tree_chunk = ChunkInfo::GetChunk(new_chunk, INIT_HEAP_PAGE_SIZE, node, false, nullptr, nullptr);
+        MemoryChunkInfo* tree_chunk = MemoryChunkInfo::GetChunk(new_chunk, INIT_HEAP_PAGE_SIZE, node, false, nullptr, nullptr);
         ptr_to_bstchunk.emplace(new_chunk, tree_chunk);
     }
 }
@@ -233,7 +233,7 @@ void NumaMemoryAllocator::GrowHeap(int num_pages, int node) {
     void* ptr = SYS_MMAP_ALLOC(PageSizeToBytes(grow_pages));
     FATALIF(!SYS_MMAP_CHECK(ptr),
             "Run out of memory in allocator. Request: %d MB", grow_pages / 2);
-    ChunkInfo* new_chunk = ChunkInfo::GetChunk(ptr, grow_pages, node, false, nullptr, nullptr);
+    MemoryChunkInfo* new_chunk = MemoryChunkInfo::GetChunk(ptr, grow_pages, node, false, nullptr, nullptr);
     ptr_to_bstchunk.emplace(ptr, new_chunk);
     numa_num_to_node[node]->free_tree[grow_pages].insert(ptr);
 }
@@ -248,10 +248,10 @@ void* NumaMemoryAllocator::BSTreeAlloc(int num_pages, int node) {
         unordered_set<void*>& ptrs = it->second;
         void* fit_ptr = *ptrs.begin();
         EraseTreePtr(size, fit_ptr, node);
-        ChunkInfo* &alloc_chunk = ptr_to_bstchunk[fit_ptr];
+        MemoryChunkInfo* &alloc_chunk = ptr_to_bstchunk[fit_ptr];
         if (size > num_pages) {
             // if the selected free block is larger than the request size
-            ChunkInfo* remain_chunk = alloc_chunk->Split(num_pages);
+            MemoryChunkInfo* remain_chunk = alloc_chunk->Split(num_pages);
             cur_free_tree[remain_chunk->size].insert(remain_chunk->mem_ptr);
             ptr_to_bstchunk.emplace(remain_chunk->mem_ptr, remain_chunk);
         }
@@ -261,13 +261,13 @@ void* NumaMemoryAllocator::BSTreeAlloc(int num_pages, int node) {
 }
 
 void NumaMemoryAllocator::BSTreeFree(void* ptr) {
-    ChunkInfo* cur_chunk = ptr_to_bstchunk[ptr];
+    MemoryChunkInfo* cur_chunk = ptr_to_bstchunk[ptr];
     int cur_node = cur_chunk->node;
     ptr_to_bstchunk.erase(ptr);
     cur_chunk->used = false;
     UpdateStatus(-cur_chunk->size);
     // coalesce with next chunk if it is free
-    ChunkInfo* chunk = cur_chunk->CoalesceNext();
+    MemoryChunkInfo* chunk = cur_chunk->CoalesceNext();
     if (chunk) {
         EraseTreePtr(chunk->size, chunk->mem_ptr, cur_node);
         ptr_to_bstchunk.erase(chunk->mem_ptr);
@@ -295,16 +295,16 @@ size_t NumaMemoryAllocator::FreePages() const {
     return free_pages_;
 }
 
-ChunkInfo::ChunkInfo(void* ptr, int s, int nd, bool u, ChunkInfo* p, ChunkInfo* n)
+MemoryChunkInfo::MemoryChunkInfo(void* ptr, int s, int nd, bool u, MemoryChunkInfo* p, MemoryChunkInfo* n)
     : mem_ptr(ptr), size(s), node(nd), used(u), prev(p), next(n)
     { }
 
-vector<ChunkInfo*> ChunkInfo::bstchunk_pool = vector<ChunkInfo*>();
+vector<MemoryChunkInfo*> MemoryChunkInfo::bstchunk_pool = vector<MemoryChunkInfo*>();
 
-ChunkInfo* ChunkInfo::GetChunk(void* ptr, int s, int nd, bool u, ChunkInfo* p, ChunkInfo* n) {
-    ChunkInfo* chunk = nullptr;
+MemoryChunkInfo* MemoryChunkInfo::GetChunk(void* ptr, int s, int nd, bool u, MemoryChunkInfo* p, MemoryChunkInfo* n) {
+    MemoryChunkInfo* chunk = nullptr;
     if (bstchunk_pool.empty()) {
-        chunk = new ChunkInfo(ptr, s, nd, u, p, n);
+        chunk = new MemoryChunkInfo(ptr, s, nd, u, p, n);
     } else {
         chunk = bstchunk_pool.back();
         bstchunk_pool.pop_back();
@@ -313,17 +313,17 @@ ChunkInfo* ChunkInfo::GetChunk(void* ptr, int s, int nd, bool u, ChunkInfo* p, C
     return chunk;
 }
 
-void ChunkInfo::PutChunk(ChunkInfo* chunk) {
+void MemoryChunkInfo::PutChunk(MemoryChunkInfo* chunk) {
     bstchunk_pool.push_back(chunk);
 }
 
-void ChunkInfo::FreeChunks() {
+void MemoryChunkInfo::FreeChunks() {
     for (auto c : bstchunk_pool) {
         delete c;
     }
 }
 
-void ChunkInfo::Assign(void* ptr, int s, int nd, bool u, ChunkInfo* p, ChunkInfo* n) {
+void MemoryChunkInfo::Assign(void* ptr, int s, int nd, bool u, MemoryChunkInfo* p, MemoryChunkInfo* n) {
     mem_ptr = ptr;
     size = s;
     node = nd;
@@ -333,17 +333,17 @@ void ChunkInfo::Assign(void* ptr, int s, int nd, bool u, ChunkInfo* p, ChunkInfo
 }
 
 // get pointer that point to num_pages(convert to bytes) behind ptr
-void* ChunkInfo::PtrSeek(void* ptr, int num_pages) {
+void* MemoryChunkInfo::PtrSeek(void* ptr, int num_pages) {
     size_t num_bytes = static_cast<size_t>(num_pages) << ALLOC_PAGE_SIZE_EXPONENT;
     char* res = reinterpret_cast<char*>(ptr) + num_bytes;
     return reinterpret_cast<void*>(res);
 }
 
 // splits this chunk and return the remaining chunk
-ChunkInfo* ChunkInfo::Split(int used_size) {
+MemoryChunkInfo* MemoryChunkInfo::Split(int used_size) {
     assert(used_size <= size);
     void* remain = PtrSeek(mem_ptr, used_size);
-    ChunkInfo* remain_chunk = GetChunk(remain, size - used_size, node, false, this, next);
+    MemoryChunkInfo* remain_chunk = GetChunk(remain, size - used_size, node, false, this, next);
     size = used_size;
     used = true;
     if (next) {
@@ -353,7 +353,7 @@ ChunkInfo* ChunkInfo::Split(int used_size) {
     return remain_chunk;
 }
 
-ChunkInfo* ChunkInfo::CoalescePrev() {
+MemoryChunkInfo* MemoryChunkInfo::CoalescePrev() {
     // return false if no more coalesce can be perform
     if (!prev || prev->used) {
         return nullptr;
@@ -370,7 +370,7 @@ ChunkInfo* ChunkInfo::CoalescePrev() {
     return bstchunk_pool.back();
 }
 
-ChunkInfo* ChunkInfo::CoalesceNext() {
+MemoryChunkInfo* MemoryChunkInfo::CoalesceNext() {
     // return false if no more coalesce can be perform
     if (!next || next->used) {
         return nullptr;
@@ -387,7 +387,7 @@ ChunkInfo* ChunkInfo::CoalesceNext() {
 
 #ifdef GUNIT_TEST
 
-ostream& operator <<(ostream &output, ChunkInfo &chunk) {
+ostream& operator <<(ostream &output, MemoryChunkInfo &chunk) {
     output << "pointer:" << ((long)chunk.mem_ptr) / (512*1024) << endl;
     output << "size:" << chunk.size << endl;
     output << "node:" << chunk.node << endl;
