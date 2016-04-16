@@ -226,6 +226,12 @@ inline __uint64_t HashString ( const void * key, int len, __uint64_t seed = H_b 
 	return h;
 }
 
+// Global hash function for user-defined types before template specialization.
+template <typename T>
+inline uint64_t Hash(const T& data) {
+  return HashString(&data, sizeof(T));
+}
+
 /*
 inline __uint64_t HashString(const char* str, __uint64_t b = H_b){
 

@@ -17,16 +17,16 @@ typedef uint32_t UINT;
 // Inline functions
 
 
-<?  $constructors[] = [['BASE::NULL'], true, 'INT_Null']; ?>
+<?  $constructors[] = [['BASE::NULL'], true, 'UINT_Null']; ?>
 inline
-UINT INT_Null( const GrokitNull & n ) {
+UINT UINT_Null( const GrokitNull & n ) {
     return <?=$nullVal?>;
 }
 
 <? ob_start(); ?>
 
 inline void FromString(@type & x, const char* text){
-    x=atoi(text);
+    x=atol(text);
 }
 
 inline int ToString(const @type & x, char* text){
@@ -36,7 +36,8 @@ inline int ToString(const @type & x, char* text){
 
 // The hash function
 // we just use conversion to larger size
-inline uint64_t Hash(const @type x){ return x;}
+template<>
+inline uint64_t Hash(const @type& x){ return x;}
 
 
 // Deep copy
