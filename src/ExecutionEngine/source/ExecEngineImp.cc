@@ -22,17 +22,6 @@
 #include "DiskPool.h"
 #include "CommunicationFramework.h"
 
-// these are the codes for the various message types handled by the exec engine
-// these are only used internally, within the exec engine
-#define HOPPING_DOWNSTREAM_MESSAGE 1
-#define HOPPING_UPSTREAM_MESSAGE 2
-#define DIRECT_MESSAGE 3
-#define HOPPING_DATA_MESSAGE 4
-#define CPU_TOKEN_REQUEST 5
-#define DISK_TOKEN_REQUEST 6
-#define ACK 7
-#define DROP 8
-
 using namespace std;
 
 void ExecEngine :: Debugg () {
@@ -40,18 +29,17 @@ void ExecEngine :: Debugg () {
   temp->Debugg ();
 }
 
-
 void ExecEngineImp :: Debugg(void){
-    // just go through the list of waypoints and ask all of them to debugg
+    // just go through the list of waypoints and ask all of them to debug
     FOREACH_EM(key, data, myWayPoints){
         printf("Debugging WayPoint %s\n", key.getName().c_str());
         data.Debugg();
     }END_FOREACH
-    printf(" \n ------- unused CPU token = %d",unusedCPUTokens.Length());
-    printf(" \n ------- unused Disk token = %d",unusedDiskTokens.Length());
-    printf(" \n ------- CPU request List = %d", requestListCPU.Length());
-    printf(" \n ------- Disk request List = %d", requestListDisk.Length());
-    printf(" \n ------- Num requests in list =%d", requests.Length());
+    printf(" \n ------- unused CPU token = %d",unusedCPUTokens.size());
+    printf(" \n ------- unused Disk token = %d",unusedDiskTokens.size());
+    printf(" \n ------- CPU request List = %d", requestListCPU.size());
+    printf(" \n ------- Disk request List = %d", requestListDisk.size());
+    printf(" \n ------- Num requests in list =%d", requests.size());
 
 }
 
@@ -75,6 +63,8 @@ ExecEngineImp :: ExecEngineImp (const std::string & _mailbox) :
     requestListDisk(),
     frozenOutFromCPU(),
     frozenOutFromDisk(),
+    delayRequestListCPU(),
+    delayRequestListDisk(),
     // initially, anything can run... so we use a very large number as the cutoff
     priorityCPU(999),
     priorityDisk(999),
@@ -93,14 +83,12 @@ ExecEngineImp :: ExecEngineImp (const std::string & _mailbox) :
 
     // create and load up all of the CPU tokens
     for (int i = 0; i < NUM_EXEC_ENGINE_THREADS; i++) {
-        CPUWorkToken temp(i + 100);
-        unusedCPUTokens.Insert (temp);
+        unusedCPUTokens.emplace_back(i + 100);
     }
 
     // create and load up all of the disk tokens
     for (int i = 0; i < NUM_DISK_TOKENS; i++) {
-        DiskWorkToken temp(i + 200);
-        unusedDiskTokens.Insert (temp);
+        unusedDiskTokens.emplace_back(i + 200);
     }
 }
 
@@ -122,22 +110,20 @@ int ExecEngineImp :: DeliverSomeMessage () {
 
 
     // first, see if there are any requests
-    if (!AreRequests ())
+    if (requests.empty())
         return 0;
 
-    int whatToDo;
-    RemoveRequest (whatToDo);
+    MessageType whatToDo = RemoveRequest();
 
     switch (whatToDo) {
 
         /************************/
-        case HOPPING_DOWNSTREAM_MESSAGE:
+        case MessageType::HOPPING_DOWNSTREAM_MESSAGE:
         {
 
             // take the message out
-            hoppingDownstreamMessages.MoveToStart ();
-            HoppingDownstreamMsg temp;
-            hoppingDownstreamMessages.Remove (temp);
+            HoppingDownstreamMsg &temp = hoppingDownstreamMessages.front();
+            hoppingDownstreamMessages.pop_front();
 
             // now find all of the places it needs to be routed to
             InefficientMap <WayPointID, QueryExitContainer> allSubsets;
@@ -185,12 +171,11 @@ int ExecEngineImp :: DeliverSomeMessage () {
             return 1;
 
             /****************************/
-        } case HOPPING_UPSTREAM_MESSAGE: {
+        } case MessageType::HOPPING_UPSTREAM_MESSAGE: {
 
             // take the message out
-            hoppingUpstreamMessages.MoveToStart ();
-            HoppingUpstreamMsg temp;
-            hoppingUpstreamMessages.Remove (temp);
+            HoppingUpstreamMsg &temp = hoppingUpstreamMessages.front();
+            hoppingUpstreamMessages.pop_front();
 
             // now find the place it needs to be routed to
             WayPointIDContainer nextOnes;
@@ -215,12 +200,11 @@ int ExecEngineImp :: DeliverSomeMessage () {
 
 
             /*******/
-        } case ACK: {
+        } case MessageType::ACK: {
 
             // take the message out
-            acks.MoveToStart ();
-            LineageData temp;
-            acks.Remove (temp);
+            LineageData &temp = acks.front();
+            acks.pop_front();
 
             // now find the place it needs to be routed to
             temp.history.MoveToFinish ();
@@ -237,12 +221,11 @@ int ExecEngineImp :: DeliverSomeMessage () {
             return 1;
 
             /********/
-        } case DROP: {
+        } case MessageType::DROP: {
 
             // take the message out
-            drops.MoveToStart ();
-            LineageData temp;
-            drops.Remove (temp);
+            LineageData &temp = drops.front();
+            drops.pop_front();
 
             // now find the place it needs to be routed to
             temp.history.MoveToFinish ();
@@ -259,12 +242,11 @@ int ExecEngineImp :: DeliverSomeMessage () {
             return 1;
 
             /******************/
-        } case DIRECT_MESSAGE: {
+        } case MessageType::DIRECT_MESSAGE: {
 
             // send a direct message
-            directMessages.MoveToStart ();
-            DirectMsg temp;
-            directMessages.Remove (temp);
+            DirectMsg &temp = directMessages.front();
+            directMessages.pop_front();
 
             // now, actually deliver the message
             WayPoint &myWayPoint = myWayPoints.Find (temp.get_receiver ());
@@ -276,12 +258,11 @@ int ExecEngineImp :: DeliverSomeMessage () {
             return 1;
 
             /************************/
-        } case HOPPING_DATA_MESSAGE: {
+        } case MessageType::HOPPING_DATA_MESSAGE: {
 
             // take the message out
-            hoppingDataMessages.MoveToStart ();
-            HoppingDataMsg temp;
-            hoppingDataMessages.Remove (temp);
+            HoppingDataMsg &temp = hoppingDataMessages.front();
+            hoppingDataMessages.pop_front();
 
             // now find all of the places it needs to be routed to
             InefficientMap <WayPointID, QueryExitContainer> allSubsets;
@@ -332,13 +313,11 @@ int ExecEngineImp :: DeliverSomeMessage () {
             return 1;
 
             /*********************/
-        } case CPU_TOKEN_REQUEST: {
-
-            TokenRequest whoIsAsking;
+        } case MessageType::CPU_TOKEN_REQUEST: {
 
             // take out the CPU request
-            requestListCPU.MoveToStart ();
-            requestListCPU.Remove (whoIsAsking);
+            TokenRequest &whoIsAsking = requestListCPU.front();
+            requestListCPU.pop_front();
 
             // now we have the CPU request... so we will make sure it has a high enough priority
             if (whoIsAsking.priority > GetPriorityCutoff (CPUWorkToken::type)) {
@@ -346,15 +325,13 @@ int ExecEngineImp :: DeliverSomeMessage () {
                 // if we got in there, it is not high enough priority, so we just buffer it
                 // for future use... if the priority cutoff changes in the future, we will
                 // go ahead and try to process all of these requests
-                frozenOutFromCPU.MoveToFinish ();
-                frozenOutFromCPU.Insert (whoIsAsking);
+                frozenOutFromCPU.emplace_back(move(whoIsAsking));
                 return 1;
             }
 
             // take out the token
-            CPUWorkToken workToken;
-            unusedCPUTokens.MoveToStart ();
-            unusedCPUTokens.Remove (workToken);
+            CPUWorkToken &workToken = unusedCPUTokens.front();
+            unusedCPUTokens.pop_front();
 
             if (!myWayPoints.IsThere (whoIsAsking.whoIsAsking)) {
                 FATAL ("I could not find a waypoint who had requested a token!");
@@ -365,13 +342,11 @@ int ExecEngineImp :: DeliverSomeMessage () {
             return 1;
 
             /*********************/
-        } case DISK_TOKEN_REQUEST: {
-
-            TokenRequest whoIsAsking;
+        } case MessageType::DISK_TOKEN_REQUEST: {
 
             // take out the Disk request
-            requestListDisk.MoveToStart ();
-            requestListDisk.Remove (whoIsAsking);
+            TokenRequest &whoIsAsking = requestListDisk.front();
+            requestListDisk.pop_front();
 
             // now we have the Disk request... so we will make sure it has a high enough priority
             if (whoIsAsking.priority > GetPriorityCutoff (DiskWorkToken::type)) {
@@ -379,15 +354,13 @@ int ExecEngineImp :: DeliverSomeMessage () {
                 // if we got in there, it is not high enough priority, so we just buffer it
                 // for future use... if the priority cutoff changes in the future, we will
                 // go ahead and try to process all of these requests
-                frozenOutFromDisk.MoveToFinish ();
-                frozenOutFromDisk.Insert (whoIsAsking);
+                frozenOutFromDisk.emplace_back(move(whoIsAsking));
                 return 1;
             }
 
             // take out the token
-            DiskWorkToken workToken;
-            unusedDiskTokens.MoveToStart ();
-            unusedDiskTokens.Remove (workToken);
+            DiskWorkToken &workToken = unusedDiskTokens.front();
+            unusedDiskTokens.pop_front();
 
             if (!myWayPoints.IsThere (whoIsAsking.whoIsAsking)) {
                 FATAL ("I could not find a waypoint who had requested a token!");
@@ -400,7 +373,7 @@ int ExecEngineImp :: DeliverSomeMessage () {
             /***********/
         } default:
 
-        FATAL ("Got some weird request into the queue.\n");
+            FATAL ("Got some weird request into the queue.\n");
 
     }
 
@@ -417,10 +390,9 @@ int ExecEngineImp :: RequestTokenImmediate (WayPointID &whoIsAsking, off_t reque
         if (priority > GetPriorityCutoff (CPUWorkToken::type))
             return 0;
 
-        if (unusedCPUTokens.Length () > requestListCPU.Length ()) {
-            CPUWorkToken temp;
-            unusedCPUTokens.Remove (temp);
-            temp.swap (returnVal);
+        if (unusedCPUTokens.size() > requestListCPU.size()) {
+            returnVal.swap(unusedCPUTokens.front());
+            unusedCPUTokens.pop_front();
             return 1;
         }
         return 0;
@@ -432,10 +404,9 @@ int ExecEngineImp :: RequestTokenImmediate (WayPointID &whoIsAsking, off_t reque
         if (priority > GetPriorityCutoff (DiskWorkToken::type))
             return 0;
 
-        if (unusedDiskTokens.Length () > requestListDisk.Length ()) {
-            DiskWorkToken temp;
-            unusedDiskTokens.Remove (temp);
-            temp.swap (returnVal);
+        if (unusedDiskTokens.size() > requestListDisk.size()) {
+            returnVal.swap(unusedDiskTokens.front());
+            unusedDiskTokens.pop_front();
             return 1;
         }
         return 0;
@@ -446,28 +417,25 @@ int ExecEngineImp :: RequestTokenImmediate (WayPointID &whoIsAsking, off_t reque
 
 void ExecEngineImp :: RequestTokenDelayOK (WayPointID &whoIsAsking, off_t requestType, int priority) {
 
-    // create a work request
-    TokenRequest temp (whoIsAsking, priority);
-
     // we cannot, so shove the request on a queue
     // first, we look to give out a CPU work token
     if (requestType == CPUWorkToken::type) {
 
-        // record the request
-        requestListCPU.Insert (temp);
+        // create and record the work request
+        requestListCPU.emplace_back(move(whoIsAsking), priority);
 
         // schedule some token delivery in the future
-        if (unusedCPUTokens.Length () >= requestListCPU.Length ()) {
-            InsertRequest(CPU_TOKEN_REQUEST);
+        if (unusedCPUTokens.size() >= requestListCPU.size()) {
+            InsertRequest(MessageType::CPU_TOKEN_REQUEST);
         }
 
     } else if (requestType == DiskWorkToken::type) {
 
-        // record the request
-        requestListDisk.Insert (temp);
+        // create and record the work request
+        requestListDisk.emplace_back(move(whoIsAsking), priority);
 
-        if (unusedDiskTokens.Length () >= requestListDisk.Length ()) {
-            InsertRequest(DISK_TOKEN_REQUEST);
+        if (unusedDiskTokens.size() >= requestListDisk.size()) {
+            InsertRequest(MessageType::DISK_TOKEN_REQUEST);
         }
 
     } else {
@@ -475,14 +443,32 @@ void ExecEngineImp :: RequestTokenDelayOK (WayPointID &whoIsAsking, off_t reques
     }
 }
 
+void ExecEngineImp :: RequestTokenDelayMillis (WayPointID &whoIsAsking, off_t requestType, uint64_t millis, int priority) {
+    // fulfill a request no earlier than "millis"(input argument) milliseconds from now
+
+    // first, we look to give out a CPU work token
+    if (requestType == CPUWorkToken::type) {
+        // add to the min priority queue rank by the expected time(current time + millis) to be granted
+        delayRequestListCPU.emplace(move(whoIsAsking), priority, millis);
+    }
+
+    // now we look to give out a disk work token
+    if (requestType == DiskWorkToken::type) {
+        // add to the min priority queue rank by the expected time(current time + millis) to be granted
+        delayRequestListDisk.emplace(move(whoIsAsking), priority, millis);
+    }
+
+    FATAL ("You have asked for an unsupported token type!!\n");
+
+}
+
 void ExecEngineImp :: SendHoppingDataMsg( HoppingDataMsg &sendMe ) {
     FATALIF(sendMe.Type() == ABSTRACT_DATA_TYPE, "Message is invalid");
     FATALIF(CHECK_DATA_TYPE(sendMe.get_data(), ExecEngineData), "Payload is invalid");
 
     // store the message for later processing
-    hoppingDataMessages.MoveToFinish ();
-    hoppingDataMessages.Insert( sendMe );
-    InsertRequest( HOPPING_DATA_MESSAGE );
+    hoppingDataMessages.emplace_back(move(sendMe));
+    InsertRequest(MessageType::HOPPING_DATA_MESSAGE);
 }
 
 void ExecEngineImp :: SendHoppingDownstreamMsg (HoppingDownstreamMsg &sendMe) {
@@ -491,9 +477,8 @@ void ExecEngineImp :: SendHoppingDownstreamMsg (HoppingDownstreamMsg &sendMe) {
     FATALIF(sendMe.get_msg().Type() == ABSTRACT_DATA_TYPE, "Payload is invalid");
 
     // store the message for later processing
-    hoppingDownstreamMessages.MoveToFinish ();
-    hoppingDownstreamMessages.Insert (sendMe);
-    InsertRequest (HOPPING_DOWNSTREAM_MESSAGE);
+    hoppingDownstreamMessages.emplace_back(move(sendMe));
+    InsertRequest (MessageType::HOPPING_DOWNSTREAM_MESSAGE);
 }
 
 void ExecEngineImp :: SendHoppingUpstreamMsg (HoppingUpstreamMsg &sendMe) {
@@ -502,35 +487,29 @@ void ExecEngineImp :: SendHoppingUpstreamMsg (HoppingUpstreamMsg &sendMe) {
     FATALIF(sendMe.get_msg().Type() == ABSTRACT_DATA_TYPE, "Payload is invalid");
 
     // and store the message for later processing
-    hoppingUpstreamMessages.MoveToFinish ();
-    hoppingUpstreamMessages.Insert (sendMe);
-    InsertRequest (HOPPING_UPSTREAM_MESSAGE);
+    hoppingUpstreamMessages.emplace_back(move(sendMe));
+    InsertRequest (MessageType::HOPPING_UPSTREAM_MESSAGE);
 }
 
 void ExecEngineImp :: SendAckMsg (QueryExitContainer &whichOnes, HistoryList &lineage) {
 
     // this is easy: just load up the ack
-    LineageData temp (whichOnes, lineage);
-    acks.MoveToStart ();
-    acks.Insert (temp);
-    InsertRequest (ACK);
+    acks.emplace_back(whichOnes, lineage);
+    InsertRequest (MessageType::ACK);
 }
 
 void ExecEngineImp :: SendDropMsg (QueryExitContainer &whichOnes, HistoryList &lineage) {
 
     // just as easy: simply load up the drop
-    LineageData temp (whichOnes, lineage);
-    drops.MoveToFinish ();
-    drops.Insert (temp);
-    InsertRequest (DROP);
+    drops.emplace_back(whichOnes, lineage);
+    InsertRequest (MessageType::DROP);
 }
 
 void ExecEngineImp :: SendDirectMsg (DirectMsg &sendMe) {
 
     // and store the message for later processing
-    directMessages.MoveToFinish ();
-    directMessages.Insert (sendMe);
-    InsertRequest (DIRECT_MESSAGE);
+    directMessages.emplace_back(move(sendMe));
+    InsertRequest (MessageType::DIRECT_MESSAGE);
 }
 
 MESSAGE_HANDLER_DEFINITION_BEGIN(ExecEngineImp, ConfigureExecEngine, ConfigureExecEngineMessage) {
@@ -601,12 +580,12 @@ void ExecEngineImp :: GiveBackToken (GenericWorkToken &giveBack) {
 
         // store the token for later use
         CPUWorkToken temp;
-        temp.swap (giveBack);
-        unusedCPUTokens.Insert (temp);
+        temp.swap(giveBack);
+        unusedCPUTokens.emplace_back(move(temp));
 
         // if there was someone waiting on the token, then put in the request
-        if (unusedCPUTokens.Length () <= requestListCPU.Length ()) {
-            InsertRequest(CPU_TOKEN_REQUEST);
+        if (unusedCPUTokens.size() <= requestListCPU.size()) {
+            InsertRequest(MessageType::CPU_TOKEN_REQUEST);
         }
 
         // this next bit of code handles a disk token
@@ -614,12 +593,12 @@ void ExecEngineImp :: GiveBackToken (GenericWorkToken &giveBack) {
 
         // store the token for later use
         DiskWorkToken temp;
-        temp.swap (giveBack);
-        unusedDiskTokens.Insert (temp);
+        temp.swap(giveBack);
+        unusedDiskTokens.emplace_back(move(temp));
 
         // if there was someone waiting on the token, then put in the request
-        if (unusedDiskTokens.Length () <= requestListDisk.Length ()) {
-            InsertRequest(DISK_TOKEN_REQUEST);
+        if (unusedDiskTokens.size() <= requestListDisk.size()) {
+            InsertRequest(MessageType::DISK_TOKEN_REQUEST);
         }
 
     } else {
@@ -638,7 +617,7 @@ MESSAGE_HANDLER_DEFINITION_BEGIN(ExecEngineImp, HoppingDataMsgReady, HoppingData
 
 
         // this makes it so that the guy can keep the token if he wants to
-        // putting the token here mayes it available for "reclaiming" by the
+        // putting the token here makes it available for "reclaiming" by the
         // waypoint that originally ran it
         evProc.holdMe.swap (msg.token);
         evProc.holdMeIsValid = 1;
@@ -663,8 +642,8 @@ MESSAGE_HANDLER_DEFINITION_BEGIN(ExecEngineImp, HoppingDataMsgReady, HoppingData
 
     // if we did not get a generic (invalid) data object back, then add it to the delivery queue
     if (!CHECK_DATA_TYPE (msg.message.get_data (), ExecEngineData)) {
-        evProc.hoppingDataMessages.Append(msg.message);
-        evProc.InsertRequest (HOPPING_DATA_MESSAGE);
+        evProc.hoppingDataMessages.emplace_back(move(msg.message));
+        evProc.InsertRequest (MessageType::HOPPING_DATA_MESSAGE);
     }
 
     // and then process any messages that are waiting to be delivered
@@ -673,24 +652,14 @@ MESSAGE_HANDLER_DEFINITION_BEGIN(ExecEngineImp, HoppingDataMsgReady, HoppingData
 } MESSAGE_HANDLER_DEFINITION_END
 
 
-void ExecEngineImp :: InsertRequest (int requestID) {
-
-    SwapifiedInt temp;
-    temp = requestID;
-    requests.Append (temp);
-
+void ExecEngineImp :: InsertRequest (ExecEngineImp :: MessageType requestID) {
+    requests.push_back(requestID);
 }
 
-int ExecEngineImp :: AreRequests () {
-    return requests.Length ();
-}
-
-void ExecEngineImp :: RemoveRequest (int &requestID) {
-
-    SwapifiedInt temp;
-    requests.MoveToStart ();
-    requests.Remove (temp);
-    requestID = temp;
+ExecEngineImp ::MessageType ExecEngineImp :: RemoveRequest () {
+    MessageType &requestID = requests.front();
+    requests.pop_front();
+    return requestID;
 }
 
 int ExecEngineImp :: GetPriorityCutoff (off_t requestType) {
@@ -714,14 +683,10 @@ void ExecEngineImp :: SetPriorityCutoff (off_t requestType, int priority) {
 
         // now we look for anyone who was frozen out from the CPU due to a low priority...
         // if they now have a high enough priority, then we ill add them to the queue
-        frozenOutFromCPU.MoveToStart ();
-        while (frozenOutFromCPU.RightLength ()) {
-            if (frozenOutFromCPU.Current ().priority <= priority) {
-                TokenRequest temp;
-                frozenOutFromCPU.Remove (temp);
-                RequestTokenDelayOK (temp.whoIsAsking, CPUWorkToken :: type, temp.priority);
-            } else {
-                frozenOutFromCPU.Advance ();
+        for (auto it = frozenOutFromCPU.begin(); it != frozenOutFromCPU.end(); ++it) {
+            if (it->priority <= priority) {
+                RequestTokenDelayOK(it->whoIsAsking, CPUWorkToken :: type, it->priority);
+                frozenOutFromCPU.erase(it);
             }
         }
 
@@ -731,16 +696,42 @@ void ExecEngineImp :: SetPriorityCutoff (off_t requestType, int priority) {
         priorityDisk = priority;
 
         // now we look for anyone who was frozen out from the Disk due to a low priority...
-        // if they now have a high enough priority, then we ill add them to the queue
-        frozenOutFromDisk.MoveToStart ();
-        while (frozenOutFromDisk.RightLength ()) {
-            if (frozenOutFromDisk.Current ().priority <= priority) {
-                TokenRequest temp;
-                frozenOutFromDisk.Remove (temp);
-                RequestTokenDelayOK (temp.whoIsAsking, DiskWorkToken :: type, temp.priority);
-            } else {
-                frozenOutFromDisk.Advance ();
+        // if they now have a high enough priority, then we will add them to the queue
+        for (auto it = frozenOutFromDisk.begin(); it != frozenOutFromDisk.end(); ++it) {
+            if (it->priority <= priority) {
+                RequestTokenDelayOK(it->whoIsAsking, DiskWorkToken :: type, it->priority);
+                frozenOutFromDisk.erase(it);
             }
+        }
+    } else {
+        FATAL ("You set the priority for a resource I do not recognize");
+    }
+
+    // and then process any messages that are waiting to be delivered... we do this because there
+    // might now be some CPU or disk requests that we can process
+    while (DeliverSomeMessage ());
+}
+
+void ExecEngineImp :: GrantDelayTokens(off_t requestType) {
+    // get current time
+    auto now = std::chrono::system_clock::now().time_since_epoch();
+    uint64_t nowInMillis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+
+    if (requestType == CPUWorkToken :: type) {
+
+        // now we look for CPU tokens requests who was expected to be granted
+        while (!delayRequestListCPU.empty() && nowInMillis >= delayRequestListCPU.top().expectedTimeMillis) {
+            DelayTokenRequest& delayToken = const_cast<DelayTokenRequest&>(delayRequestListCPU.top());
+            RequestTokenDelayOK(delayToken.whoIsAsking, CPUWorkToken :: type, delayToken.priority);
+            delayRequestListDisk.pop();
+        }
+    } else if (requestType == DiskWorkToken :: type) {
+
+        // now we look for disk tokens requests who was expected to be granted
+        while (!delayRequestListDisk.empty() && nowInMillis >= delayRequestListDisk.top().expectedTimeMillis) {
+            DelayTokenRequest& delayToken = const_cast<DelayTokenRequest&>(delayRequestListDisk.top());
+            RequestTokenDelayOK(delayToken.whoIsAsking, DiskWorkToken :: type, delayToken.priority);
+            delayRequestListDisk.pop();
         }
     } else {
         FATAL ("You set the priority for a resource I do not recognize");

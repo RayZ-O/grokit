@@ -17,10 +17,15 @@
 #ifndef EXEC_ENGINE_IMP_H
 #define EXEC_ENGINE_IMP_H
 
+#include <deque>
+#include <list>
+#include <queue>
 #include <string>
 #include <unordered_map>
+#include <chrono>
 
 #include "Tokens.h"
+#include "TokenRequest.h"
 #include "EventProcessor.h"
 #include "Message.h"
 #include "EEMessageTypes.h"
@@ -29,28 +34,37 @@
 #include "ServiceData.h"
 #include "ServiceMessages.h"
 
-struct TokenRequest;
-
 class ExecEngineImp : public  EventProcessorImp {
+    // these are the codes for the various message types handled by the exec engine
+    enum class MessageType : unsigned int {
+        HOPPING_DOWNSTREAM_MESSAGE = 1,
+        HOPPING_UPSTREAM_MESSAGE = 2,
+        DIRECT_MESSAGE = 3,
+        HOPPING_DATA_MESSAGE = 4,
+        CPU_TOKEN_REQUEST = 5,
+        DISK_TOKEN_REQUEST = 6,
+        ACK = 7,
+        DROP = 8
+    };
 
 private:
-    // this is the central message queue used to order all of the reuqests
-    typedef Swapify <int> SwapifiedInt;
-    TwoWayList <SwapifiedInt> requests;
+
+    // this is the central message queue used to order all of the requests
+    std::deque <MessageType> requests;
 
     // the set of all CPU tokens that are not assigned
-    TwoWayList <CPUWorkToken> unusedCPUTokens;
+    std::deque <CPUWorkToken> unusedCPUTokens;
 
     // the set of all disk work tokens that are not assigned
-    TwoWayList <DiskWorkToken> unusedDiskTokens;
+    std::deque <DiskWorkToken> unusedDiskTokens;
 
     // these are all of the message queues
-    TwoWayList <HoppingDataMsg> hoppingDataMessages;
-    TwoWayList <HoppingDownstreamMsg> hoppingDownstreamMessages;
-    TwoWayList <HoppingUpstreamMsg> hoppingUpstreamMessages;
-    TwoWayList <LineageData> acks;
-    TwoWayList <LineageData> drops;
-    TwoWayList <DirectMsg> directMessages;
+    std::deque <HoppingDataMsg> hoppingDataMessages;
+    std::deque <HoppingDownstreamMsg> hoppingDownstreamMessages;
+    std::deque <HoppingUpstreamMsg> hoppingUpstreamMessages;
+    std::deque <LineageData> acks;
+    std::deque <LineageData> drops;
+    std::deque <DirectMsg> directMessages;
 
     // the routing graph
     DataPathGraph myGraph;
@@ -59,15 +73,24 @@ private:
     WayPointMap myWayPoints;
 
     // this is the set of outstanding requests for disk and CPU tokens
-    TwoWayList <TokenRequest> requestListCPU;
-    TwoWayList <TokenRequest> requestListDisk;
+    std::deque <TokenRequest> requestListCPU;
+    std::deque <TokenRequest> requestListDisk;
 
     // this is the set of outstanding requests that are too low in priority to be fulfilled
-    TwoWayList <TokenRequest> frozenOutFromCPU;
-    TwoWayList <TokenRequest> frozenOutFromDisk;
+    std::list <TokenRequest> frozenOutFromCPU;
+    std::list <TokenRequest> frozenOutFromDisk;
+
+    // this is the set of outstanding requests that are expected to granted no earlier than specific
+    // amount of time
+    using DelayTokenQueue = std::priority_queue <DelayTokenRequest,
+                                                 std::vector<DelayTokenRequest>, // underlying container
+                                                 DelayTokenRequestComparator>;   // comparator
+
+    DelayTokenQueue delayRequestListCPU;
+    DelayTokenQueue delayRequestListDisk;
 
     // this is the cutoff in priority for the CPU and the disk... a higher cutoff means that
-    // it is harder to get te resources.  Any resource request having a priority that is a
+    // it is harder to get the resources.  Any resource request having a priority that is a
     // larger number than the cutoff for the resource can never be fulfilled until the
     // priority cutoff changes to a value that is no smaller than the priority of the request
     int priorityCPU;
@@ -77,9 +100,8 @@ private:
     int DeliverSomeMessage ();
 
     // these manipulate the central FIFO queue
-    void InsertRequest (int requestID);
-    int AreRequests ();
-    void RemoveRequest (int &requestID);
+    void InsertRequest (MessageType requestID);
+    MessageType RemoveRequest ();
 
     // this is the most recent token we got back from a worker... it is stored by the engine
     // momentarily so that a waypoint can ask for it back within the DoneProducing method
@@ -118,10 +140,10 @@ protected:
     // the token that was given to the ExecEngine along with the hopping data message
     void ReclaimToken (GenericWorkToken &);
 
-    // these next two should also only be called by the ExecEngine class...
+    // these next three should also only be called by the ExecEngine class...
 
     // request a work token from the execution engine; if one is available, a 1 is returned... otherwise,
-    // a zero is returned... called when you cannot wait and will drop work if no worker is availbale
+    // a zero is returned... called when you cannot wait and will drop work if no worker is available
     // Note the priority field.  The smaller the number, the greater the priority associated with the
     // request being made.  The way that this works is that your request will be denied (even if
     // there are tokens available) if the priority cutoff for your request type has been set to be
@@ -133,7 +155,11 @@ protected:
     // than your request's priority
     void RequestTokenDelayOK (WayPointID &whoIsAsking, off_t requestType, int priority = 1);
 
-    // this sets the priority cutoff for a particular requet type (note a lower number means a higher
+    // request a delay work token, the request will be granted no earlier than the specific amount of
+    // milliseconds from now.
+    void RequestTokenDelayMillis (WayPointID &whoIsAsking, off_t requestType, uint64_t millis, int priority = 1);
+
+    // this sets the priority cutoff for a particular request type (note a lower number means a higher
     // cutoff, since 1 is the highest priority).  The way that this works is that no token requests will
     // ever be granted for the particular request type if the priority associated with the request is
     // a greater number than the current cutoff
@@ -141,6 +167,10 @@ protected:
 
     // this obtains the current priority cutoff
     int GetPriorityCutoff (off_t requestType);
+
+    // find out all token requests that can be granted now and add them to the request list, this function
+    // should by trigger periodically to avoid deadlock
+    void GrantDelayTokens(off_t requestType);
 
     /*
      * Registers the specified waypoint as the handler for the service given by serviceID.
@@ -172,7 +202,7 @@ public:
     // this allows one to configure the execution engine
     MESSAGE_HANDLER_DECLARATION(ConfigureExecEngine);
 
-    // this allows one to inject a hopping data message into the execution egine
+    // this allows one to inject a hopping data message into the execution engine
     MESSAGE_HANDLER_DECLARATION(HoppingDataMsgReady);
 
     // allows someone to give back a token without a hopping data message
@@ -183,29 +213,6 @@ public:
 
     // allows someone to send a control message to a registered service.
     MESSAGE_HANDLER_DECLARATION(ServiceControlMessage_H);
-};
-
-// this is a silly little struct that is used to hold requests for resource tokens
-struct TokenRequest {
-
-    WayPointID whoIsAsking;
-    int priority;
-
-    TokenRequest () {}
-    ~TokenRequest () {}
-
-    TokenRequest (WayPointID whoIn, int priorityIn) {
-        whoIsAsking = whoIn;
-        priority = priorityIn;
-    }
-
-    void swap (TokenRequest &withMe) {
-        char temp[sizeof (TokenRequest)];
-        memmove (temp, &withMe, sizeof (TokenRequest));
-        memmove (&withMe, this, sizeof (TokenRequest));
-        memmove (this, temp, sizeof (TokenRequest));
-    }
-
 };
 
 #endif

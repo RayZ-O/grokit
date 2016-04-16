@@ -88,6 +88,11 @@ class ExecEngine : public EventProcessor {
             temp->RequestTokenDelayOK (myID, requestType, priority);
         }
 
+         void RequestTokenDelayMillis (WayPointID &myID, off_t requestType, uint64_t millis, int priority = 2) {
+            ExecEngineImp *temp = dynamic_cast <ExecEngineImp *> (evProc);
+            temp->RequestTokenDelayMillis (myID, requestType, millis, priority);
+         }
+
         void Debugg(void);
 
         int GetPriorityCutoff (off_t requestType) {
@@ -98,6 +103,11 @@ class ExecEngine : public EventProcessor {
         void SetPriorityCutoff (off_t requestType, int priority) {
             ExecEngineImp *temp = dynamic_cast <ExecEngineImp *> (evProc);
             temp->SetPriorityCutoff (requestType, priority);
+        }
+
+        void GrantDelayTokens(off_t requestType) {
+            ExecEngineImp *temp = dynamic_cast <ExecEngineImp *> (evProc);
+            temp->GrantDelayTokens (requestType);
         }
 
         void ReclaimToken (GenericWorkToken &putResHere) {
