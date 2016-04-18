@@ -71,6 +71,14 @@ int CongestionController :: GetIdealDelayMillis() {
     }
 }
 
+void CongestionController :: Reset() {
+    idToStartTime.clear();
+    window.clear();
+
+    numDrops = 0;
+    runningSum = 0UL;
+}
+
 void CongestionController :: RemoveFirst() {
     if (window.empty()) {
         return;

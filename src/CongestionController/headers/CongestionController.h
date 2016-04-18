@@ -51,6 +51,8 @@ public:
     void ProcessAckMsg(int chunkID);
     // return the ideal delay time to produce the next chunk
     int GetIdealDelayMillis();
+    // clear all current statistics
+    void Reset();
 };
 
 struct ChunkProcessStats {
